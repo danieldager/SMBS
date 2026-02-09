@@ -64,6 +64,17 @@ Metadata: parquet with columns [group_id, file_id, positive, ...]
 Tokens:   WebDataset .tar files with {__key__: file_id, tokens.npy: int16[]}
 ```
 
+### File Structure
+
+```
+scripts/swuggy/
+├── prepare_swuggy.py    # Dataset-specific: ingest raw parquet, encode audio
+├── evaluate.py          # Generic: score samples + compute accuracy
+├── plots.py             # Generate comparison plots across models/encoders
+├── utils.py             # Model loading utilities
+└── run.slurm           # SLURM launcher (auto-switches uv/conda by encoder)
+```
+
 ## Usage
 
 ### Step 1: Encode Audio
@@ -150,13 +161,58 @@ DISCRIMINATION ACCURACY
 ============================================================
 ```
 
+Also saves a bar chart to `figures/{dataset}_{encoder}_{model}.png`.
+
+### Step 3: Generate Comparison Plots
+
+After evaluating multiple models, create comparison plots:
+
+```bash
+sbatch scripts/swuggy/run.slurm plots [--raw] [--dataset DATASET]
+```
+
+**Examples:**
+
+```bash
+# Compare all models across all datasets (default: normalized log-prob)
+sbatch scripts/swuggy/run.slurm plots
+
+# Use raw log-prob instead of normalized
+sbatch scripts/swuggy/run.slurm plots --raw
+
+# Only plot swuggy dataset
+sbatch scripts/swuggy/run.slurm plots --dataset swuggy
+```
+
+**What it does:**
+
+1. Scans `metadata/` for all files matching `{dataset}_{encoder}_{model}.parquet`
+2. Groups results by dataset
+3. For each dataset, creates a bar chart comparing all encoder+model combinations
+4. Saves to `figures/{dataset}_comparison.png` (or `{dataset}_comparison_raw.png` if `--raw`)
+
+**Example output:**
+
+```
+Scanning metadata/ for evaluated results...
+Found 1 dataset(s):
+  swuggy: 3 model(s)
+
+Generating comparison plots (normalized log-prob)...
+
+swuggy:
+  ✓ Saved: figures/swuggy_comparison.png
+```
+
+The plot will have one bar for each encoder+model pair (e.g., `hubert-500_lstm_h256_l2_d0.0`, `mhubert_gpt2_e768_l12_h12`).
+
 ### Re-running Analysis Only
 
 If you've already scored a dataset and just want to see the accuracy again:
 
 ```bash
 # Same command — it detects the output exists and skips to analysis
-sbatch scripts/swuggy/run.slurm evaluate hubert-500 --dataset swuggy --model lstm_h256_l2_d0.0_09feb13
+sbatch scripts/swuggy/run.slurm evaluate hubert-500 lstm_h256_l2_d0.0_09feb13
 ```
 
 To force re-scoring (e.g., after fixing a bug):

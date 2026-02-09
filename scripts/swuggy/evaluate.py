@@ -24,6 +24,7 @@ import torch
 import webdataset as wds
 
 from scripts.encode.encoders import get_encoder_config
+from scripts.swuggy.plots import plot_accuracy
 from scripts.swuggy.utils import load_checkpoint
 
 
@@ -249,7 +250,9 @@ if __name__ == "__main__":
         print(f"Found existing results: {output_path}")
         print("Skipping scoring, running analysis only. Use --force to re-score.\n")
         df_scored = pl.read_parquet(output_path)
+        group_col = "group_id" if "group_id" in df_scored.columns else "word_id"
         print_analysis(df_scored, output_path)
+        plot_accuracy(output_path, df_scored, group_col)
         raise SystemExit(0)
 
     # ── Full evaluation run ──────────────────────────────────────
@@ -312,4 +315,8 @@ if __name__ == "__main__":
     print(f"  Saved to:     {output_path}")
 
     # ── Discrimination accuracy ──────────────────────────────────
+    group_col = "group_id" if "group_id" in df_scored.columns else "word_id"
     print_analysis(df_scored, output_path)
+    
+    # ── Generate plot ────────────────────────────────────────────
+    plot_accuracy(output_path, df_scored, group_col)
