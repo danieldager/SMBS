@@ -1,20 +1,27 @@
 from torch import nn
 from transformers import PretrainedConfig, PreTrainedModel
-from scripts.train.datasets import VOCAB_SIZE, BOS_TOKEN_ID, EOS_TOKEN_ID
 
 
 class LSTMConfig(PretrainedConfig):
+    """Config for LSTM language model.
+
+    vocab_size, bos_token_id, and eos_token_id have no defaults —
+    they must be provided at training time via EncoderConfig.
+    When loading from a checkpoint, from_pretrained() reads them
+    from the saved config.json automatically.
+    """
+
     model_type = "lstm"
 
     def __init__(
         self,
-        vocab_size=VOCAB_SIZE,
+        vocab_size=None,
         embedding_dim=768,
         hidden_size=512,
         num_layers=1,
         dropout=0.1,
-        bos_token_id=BOS_TOKEN_ID,
-        eos_token_id=EOS_TOKEN_ID,
+        bos_token_id=None,
+        eos_token_id=None,
         **kwargs,
     ):
         super().__init__(bos_token_id=bos_token_id, eos_token_id=eos_token_id, **kwargs)

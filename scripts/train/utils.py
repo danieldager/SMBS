@@ -10,22 +10,23 @@ def get_model_timestamp():
     return datetime.now().strftime("%d%b%H").lower()
 
 
-def find_latest_model_dir(base_pattern, weights_dir="./weights"):
+def find_latest_model_dir(base_pattern, encoder, weights_dir="./weights"):
     """Find most recent model directory matching a pattern.
     
     Args:
         base_pattern: Base name (e.g., "lstm_h256_l2_d0.0")
+        encoder: Encoder name (e.g., "spidr_base", "hubert-500")
         weights_dir: Weights directory path
         
     Returns:
         Path to most recent matching directory, or None if not found
     """
-    weights_path = Path(weights_dir)
-    if not weights_path.exists():
+    encoder_path = Path(weights_dir) / encoder
+    if not encoder_path.exists():
         return None
     
     matching_dirs = [
-        d for d in weights_path.iterdir()
+        d for d in encoder_path.iterdir()
         if d.is_dir() and d.name.startswith(base_pattern)
     ]
     
@@ -36,11 +37,12 @@ def find_latest_model_dir(base_pattern, weights_dir="./weights"):
     return str(matching_dirs[0])
 
 
-def load_latest_model(arch="lstm", checkpoint=None, weights_dir="./weights"):
+def load_latest_model(arch="lstm", encoder="spidr_base", checkpoint=None, weights_dir="./weights"):
     """Load most recent model of given architecture.
     
     Args:
         arch: "lstm" or "gpt2"
+        encoder: Encoder name (e.g., "spidr_base", "hubert-500")
         checkpoint: Checkpoint name (e.g., "checkpoint-1000") or None
         weights_dir: Weights directory path
         
@@ -52,9 +54,9 @@ def load_latest_model(arch="lstm", checkpoint=None, weights_dir="./weights"):
     
     base_pattern = "lstm_h256_l2_d0.0" if arch == "lstm" else "gpt2_e768_l12_h12"
     
-    model_dir = find_latest_model_dir(base_pattern, weights_dir)
+    model_dir = find_latest_model_dir(base_pattern, encoder, weights_dir)
     if model_dir is None:
-        raise FileNotFoundError(f"No models found matching: {base_pattern}")
+        raise FileNotFoundError(f"No models found matching: {base_pattern} under {encoder}")
     
     print(f"Loading from: {model_dir}")
     model_path = f"{model_dir}/{checkpoint}" if checkpoint else model_dir

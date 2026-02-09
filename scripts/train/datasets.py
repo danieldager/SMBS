@@ -5,35 +5,31 @@ It yields fixed-size blocks of tokens for training. Token sequences are packed.
 
 """
 
-import os
 import random
 import tarfile
-import traceback
 from pathlib import Path
 import webdataset as wds
 
 import torch
-import torch.distributed as dist
 from torch.utils.data import Dataset, DataLoader, IterableDataset
 
 
 # CONSTANTS
 SEED = 101
 MAX_TOKENS = 2048
-BOS_TOKEN_ID = 256
-EOS_TOKEN_ID = 257
-VOCAB_SIZE = 258  # 256 tokens + BOS + EOS
 SHUFFLE_BUFFER = 1000
 
 
 class TokenDataset(IterableDataset):
-    def __init__(self, tokens_dir: str):
+    def __init__(self, tokens_dir: str, bos_token_id: int, eos_token_id: int):
 
         # self.urls is all the paths strings to *.tar files in tokens_dir
         self.urls = sorted([str(p) for p in Path(tokens_dir).glob("*.tar")])
 
         self.block_size = MAX_TOKENS
         self.shuffle_buffer = SHUFFLE_BUFFER
+        self.bos_token_id = bos_token_id
+        self.eos_token_id = eos_token_id
 
         random.seed(SEED)
         random.shuffle(self.urls)
@@ -63,7 +59,7 @@ class TokenDataset(IterableDataset):
 
             # token_tensor = torch.from_numpy(tokens).long()
 
-            token_list = [BOS_TOKEN_ID] + tokens.tolist() + [EOS_TOKEN_ID]
+            token_list = [self.bos_token_id] + tokens.tolist() + [self.eos_token_id]
             buffer.extend(token_list)
 
             # when we have enough tokens, cut and yield a block
@@ -75,11 +71,13 @@ class TokenDataset(IterableDataset):
 
 
 class EvalDataset(Dataset):
-    def __init__(self, tokens_dir: str, num_blocks: int = 3000):
+    def __init__(self, tokens_dir: str, bos_token_id: int, eos_token_id: int, num_blocks: int = 3000):
 
         self.urls = sorted([str(p) for p in Path(tokens_dir).glob("*.tar")])
         self.block_size = MAX_TOKENS
         self.num_blocks = num_blocks
+        self.bos_token_id = bos_token_id
+        self.eos_token_id = eos_token_id
 
         random.seed(SEED)
         random.shuffle(self.urls)
@@ -104,7 +102,7 @@ class EvalDataset(Dataset):
                     print("Warning: 'tokens.npy' not found in sample, skipping.")
                     continue  # Skip samples without tokens
 
-                token_list = [BOS_TOKEN_ID] + tokens.tolist() + [EOS_TOKEN_ID]
+                token_list = [self.bos_token_id] + tokens.tolist() + [self.eos_token_id]
                 buffer.extend(token_list)
 
                 # when we have enough tokens, cut and yield a block
@@ -158,55 +156,26 @@ def check_shards(tokens_dir):
 
 
 if __name__ == "__main__":
-    rank = int(os.environ.get("RANK", 0))
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    world_size = int(os.environ.get("WORLD_SIZE", 1))
-    tokens_dir = "/scratch2/ddager/amela/tokens/chunks5_mhubert/"
-    BATCH_SIZE = 4  # Small batch size for testing
+    """Quick smoke test: load one batch and print shapes."""
+    import argparse
+    from scripts.encode.encoders import get_encoder_config
 
-    if rank == 0:
-        bad_files = check_shards(tokens_dir)
-        if bad_files:
-            # You can choose to exit here or continue
-            print("Proceeding with caution...\n")
+    parser = argparse.ArgumentParser(description="Smoke-test token dataset")
+    parser.add_argument("tokens_dir", type=str)
+    parser.add_argument("--encoder", type=str, default="spidr_base")
+    args = parser.parse_args()
 
-    # if torch.cuda.is_available():
-    #     torch.cuda.set_device(local_rank)
-    #     dist.init_process_group(backend="nccl", init_method="env://")
-    #     device = torch.device(f"cuda:{local_rank}")
-    # else:
-    #     device = torch.device("cpu")
-    #     print("WARNING: CUDA not available, running on CPU")
+    enc = get_encoder_config(args.encoder)
 
-    # print(f"[Rank {rank}] Initialized (Local Rank: {local_rank}, World: {world_size})")
+    bad_files = check_shards(args.tokens_dir)
+    if bad_files:
+        print("Proceeding with caution...\n")
 
-    try:
-        dataset = TokenDataset(tokens_dir)
+    dataset = TokenDataset(args.tokens_dir, enc.bos_token_id, enc.eos_token_id)
+    loader = DataLoader(dataset, batch_size=4, collate_fn=collate_fn, num_workers=2)
 
-        # We use a simple DataLoader.
-        # Note: In DDP, we do NOT need a DistributedSampler because WebDataset
-        # handles splitting via .split_by_node() in __iter__
-        loader = DataLoader(
-            dataset,
-            batch_size=BATCH_SIZE,
-            collate_fn=collate_fn,
-            num_workers=2,  # Testing with workers to ensure multiprocessing works
-            pin_memory=True,
-        )
-
-        for i, batch in enumerate(loader):
-            input_ids = batch["input_ids"]
-            labels = batch["labels"]
-            mask = batch["attention_mask"]
-
-            # Stop after 1 batch for this test
-            break
-
-    except Exception as e:
-        print(f"[Rank {rank}] CRITICAL ERROR: {e}")
-        traceback.print_exc()
-
-    finally:
-        # Cleanup DDP
-        if dist.is_initialized():
-            dist.destroy_process_group()
+    for batch in loader:
+        print(f"input_ids: {batch['input_ids'].shape}")
+        print(f"labels:    {batch['labels'].shape}")
+        print(f"mask:      {batch['attention_mask'].shape}")
+        break

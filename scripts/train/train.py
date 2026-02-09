@@ -40,13 +40,11 @@ from scripts.train.datasets import (
     EvalDataset,
     collate_fn,
     MAX_TOKENS,
-    BOS_TOKEN_ID,
-    EOS_TOKEN_ID,
-    VOCAB_SIZE,
 )
 
 from scripts.train.models import LSTM, LSTMConfig
 from scripts.train.utils import print_training_summary, get_model_timestamp
+from scripts.encode.encoders import get_encoder_config
 
 
 # ============================================================================
@@ -54,13 +52,10 @@ from scripts.train.utils import print_training_summary, get_model_timestamp
 # ============================================================================
 
 LSTM_MODEL_CONFIG = {
-    "vocab_size": VOCAB_SIZE,
     "embedding_dim": 256,
     "hidden_size": 256,
     "num_layers": 2,
     "dropout": 0.0,
-    "bos_token_id": BOS_TOKEN_ID,
-    "eos_token_id": EOS_TOKEN_ID,
 }
 
 LSTM_TRAINING_CONFIG = {
@@ -68,23 +63,23 @@ LSTM_TRAINING_CONFIG = {
     "disable_tqdm": True,
     "per_device_train_batch_size": 32,
     "gradient_accumulation_steps": 1,
-    "optim": "adamw_torch",
+    # NOTE: optim/lr/betas are set via custom torch.optim.Adam (not AdamW)
+    # These values are read from TrainingArguments by the custom optimizer
     "learning_rate": 1e-2,
     "adam_beta1": 0.9,
     "adam_beta2": 0.99,
     "max_grad_norm": 5.0,
-    "weight_decay": 0.0,
     "lr_scheduler_type": "constant",
     "warmup_steps": 0,
-    "max_steps": 10000,
+    "max_steps": 100000,
     "bf16": True,
     "dataloader_num_workers": 4,
-    "logging_steps": 10,
+    "logging_steps": 100,
     "save_strategy": "steps",
-    "save_steps": 500,
+    "save_steps": 1000,
     "save_total_limit": 3,
     "eval_strategy": "steps",
-    "eval_steps": 500,
+    "eval_steps": 1000,
     "metric_for_best_model": "eval_loss",
     "greater_is_better": False,
     "load_best_model_at_end": True,
@@ -95,9 +90,8 @@ LSTM_TRAINING_CONFIG = {
 }
 
 GPT2_MODEL_CONFIG = {
-    "vocab_size": VOCAB_SIZE,
-    "n_positions": 1024,
-    "n_ctx": 1024,
+    "n_positions": MAX_TOKENS,
+    "n_ctx": MAX_TOKENS,
     "n_embd": 768,
     "n_layer": 12,
     "n_head": 12,
@@ -107,13 +101,11 @@ GPT2_MODEL_CONFIG = {
     "resid_pdrop": 0.0,
     "embd_pdrop": 0.0,
     "attn_pdrop": 0.0,
-    "bos_token_id": BOS_TOKEN_ID,
-    "eos_token_id": EOS_TOKEN_ID,
 }
 
 GPT2_TRAINING_CONFIG = {
     "overwrite_output_dir": True,
-    "disable_tqdm": False,
+    "disable_tqdm": True,
     "per_device_train_batch_size": 32,
     "gradient_accumulation_steps": 4,
     "optim": "adamw_torch",
@@ -130,7 +122,7 @@ GPT2_TRAINING_CONFIG = {
     "logging_steps": 100,
     "save_strategy": "steps",
     "save_steps": 1000,
-    "save_total_limit": 20,
+    "save_total_limit": 3,
     "eval_strategy": "steps",
     "eval_steps": 1000,
     "metric_for_best_model": "eval_loss",
@@ -197,21 +189,24 @@ class CustomCallback(TrainerCallback):
 
 
 if __name__ == "__main__":
-    # Parse arguments
     parser = argparse.ArgumentParser(description="Train language model")
-    parser.add_argument(
-        "arch",
-        type=str,
-        choices=["lstm", "gpt2"],
-        help="Model architecture to train (lstm or gpt2)",
-    )
+    parser.add_argument("--arch", type=str, choices=["lstm", "gpt2"], required=True, help="Model architecture")
+    parser.add_argument("--encoder", type=str, required=True, help="Encoder name (e.g. spidr_base, mhubert, hubert-500)")
+    parser.add_argument("--train_dir", type=str, required=True, help="Directory containing training tokens")
+    parser.add_argument("--eval_dir", type=str, required=True, help="Directory containing evaluation tokens")
+
     args = parser.parse_args()
 
-    train_dir = "/scratch2/ddager/rapp/tokens/chunks30_spidr_base/"
-    eval_dir = "/scratch2/ddager/rapp/tokens/chunks-eval_spidr_base/"
+    # Get vocab config from encoder
+    enc_config = get_encoder_config(args.encoder)
+    vocab_kwargs = {
+        "vocab_size": enc_config.vocab_size,
+        "bos_token_id": enc_config.bos_token_id,
+        "eos_token_id": enc_config.eos_token_id,
+    }
 
-    train_dataset = TokenDataset(train_dir)
-    eval_dataset = EvalDataset(eval_dir)
+    train_dataset = TokenDataset(args.train_dir, enc_config.bos_token_id, enc_config.eos_token_id)
+    eval_dataset = EvalDataset(args.eval_dir, enc_config.bos_token_id, enc_config.eos_token_id)
 
     if os.environ.get("RANK", "0") == "0":
         print(f"Architecture: {args.arch.upper()}")
@@ -221,23 +216,25 @@ if __name__ == "__main__":
     timestamp = get_model_timestamp()
     
     if args.arch == "lstm":
-        config = LSTMConfig(**LSTM_MODEL_CONFIG)
+        config = LSTMConfig(**LSTM_MODEL_CONFIG, **vocab_kwargs)
         model = LSTM(config)
-        run_name = f"lstm_h{config.hidden_size}_l{config.num_layers}_d{config.dropout}_{timestamp}"
+        base_name = f"lstm_h{config.hidden_size}_l{config.num_layers}_d{config.dropout}_{timestamp}"
         training_config = LSTM_TRAINING_CONFIG
         early_stopping_patience = 5
     elif args.arch == "gpt2":
-        config = GPT2Config(**GPT2_MODEL_CONFIG)
+        config = GPT2Config(**GPT2_MODEL_CONFIG, **vocab_kwargs)
         model = GPT2LMHeadModel(config)
-        run_name = f"gpt2_e{config.n_embd}_l{config.n_layer}_h{config.n_head}_{timestamp}"
-        training_config = GPT2_TRAINING_CONFIG
-        early_stopping_patience = 3
+        base_name = f"gpt2_e{config.n_embd}_l{config.n_layer}_h{config.n_head}_{timestamp}"
+        training_config = GPT2_TRAINING_CONFIG.copy()
+        early_stopping_patience = 5
+        if enc_config.vocab_size > 1000: # Reduce batch size for large vocab size
+            training_config["per_device_train_batch_size"] = 16
     else:
         raise ValueError(f"Unsupported architecture: {args.arch}")
-
-    # Create training arguments
+    
+    # Create training arguments with encoder subdirectory
     training_args = TrainingArguments(
-        output_dir=f"./weights/{run_name}",
+        output_dir=f"./weights/{args.encoder}/{base_name}",
         **training_config,
     )
 

@@ -1,39 +1,43 @@
-"""Evaluate language models on sWuggy word-nonword classification task.
+"""
+Evaluate language models on lexical discrimination tasks.
 
-The sWuggy score measures how well a model distinguishes between real words
-and phonetically matched nonwords based on sequence probabilities.
+Combined pipeline: scores every sample with log-probabilities, saves
+the evaluated parquet, then computes and prints discrimination accuracy.
+
+If the output parquet already exists, skips scoring and goes straight to analysis.
+
+Path conventions (all derived from dataset + encoder + model):
+    Metadata in:  metadata/{dataset}.parquet
+    Tokens:       tokens/{dataset}_{encoder}/
+    Output:       metadata/{dataset}_{encoder}_{model}.parquet
+    Checkpoint:   weights/{encoder}/{model}/checkpoint-<latest>
+
+Usage:
+    python -m scripts.swuggy.evaluate --encoder hubert-500 --dataset swuggy --model lstm_h256_l2_d0.0_09feb13
 """
 
-import sys
-from pathlib import Path
 import time
+from pathlib import Path
 
 import polars as pl
 import torch
 import webdataset as wds
 
-from scripts.train.datasets import BOS_TOKEN_ID, EOS_TOKEN_ID
+from scripts.encode.encoders import get_encoder_config
 from scripts.swuggy.utils import load_checkpoint
 
 
-def print_evaluation_summary(config, n_samples, model_info):
-    """Print evaluation configuration summary."""
-    print(f"\n{'='*60}")
-    print("SWUGGY EVALUATION")
-    print(f"{'='*60}")
-    print(f"Dataset:    {n_samples} samples")
-    print(f"Model:      {model_info['type'].upper()} ({model_info['n_params']/1e6:.1f}M params)")
-    print(f"Checkpoint: {Path(config['checkpoint_path']).name}")
-    print(f"Device:     {config['device']}")
-    print(f"{'='*60}\n")
+# ============================================================================
+# Core computation
+# ============================================================================
 
 
 def calculate_sequence_log_probability(model, tokens, device):
+    """Compute log P(sequence) via autoregressive factorization.
+
+    Returns (log_prob, log_prob_normalized, num_predicted_tokens).
     """
-    Calculate log P(sequence) using autoregressive factorization.
-    Returns (log_prob, log_prob_normalized, num_tokens).
-    """
-    tokens = tokens.unsqueeze(0).to(device)  # [1, seq_len]
+    tokens = tokens.unsqueeze(0).to(device)
 
     with torch.no_grad():
         outputs = model(input_ids=tokens, labels=tokens)
@@ -41,163 +45,271 @@ def calculate_sequence_log_probability(model, tokens, device):
         # Get logits [1, seq_len, vocab_size]
         logits = outputs["logits"] if isinstance(outputs, dict) else outputs.logits
 
-        # Shift for next-token prediction: predict tokens[1:] given tokens[:-1]
-        shift_logits = logits[:, :-1, :].contiguous()  # [1, seq_len-1, vocab_size]
-        shift_labels = tokens[:, 1:].contiguous()  # [1, seq_len-1]
+        # Next-token prediction: predict tokens[1:] from tokens[:-1]
+        shift_logits = logits[:, :-1, :].contiguous()
+        shift_labels = tokens[:, 1:].contiguous()
 
-        # Calculate log probabilities
         log_probs = torch.nn.functional.log_softmax(shift_logits, dim=-1)
-
-        # Gather log probs for actual tokens
         target_log_probs = log_probs.gather(
             dim=-1, index=shift_labels.unsqueeze(-1)
-        ).squeeze(
-            -1
-        )  # [1, seq_len-1]
+        ).squeeze(-1)
 
-        # Sum to get sequence log probability
-        # This computes: log P(token_1|BOS) + log P(token_2|BOS,token_1) + ... + log P(EOS|full_context)
-        sequence_log_prob = target_log_probs.sum().item()
+        seq_log_prob = target_log_probs.sum().item()
+        n = target_log_probs.shape[1]
+        norm_log_prob = seq_log_prob / n if n > 0 else 0.0
 
-        # Length-normalized version (average log probability per token)
-        num_tokens = target_log_probs.shape[1]
-        normalized_log_prob = sequence_log_prob / num_tokens if num_tokens > 0 else 0.0
-
-    return sequence_log_prob, normalized_log_prob, num_tokens
+    return seq_log_prob, norm_log_prob, n
 
 
-def load_tokens_from_tar(tokens_dir: str) -> dict:
-    """
-    Load all token samples from WebDataset tar files.
-
-    Returns:
-        Dict mapping file_id to token tensor
-    """
-    tokens_dir_path = Path(tokens_dir)
-    urls = sorted([str(p) for p in tokens_dir_path.glob("*.tar")])
-
+def load_tokens_from_tar(tokens_dir: str, bos_token_id: int, eos_token_id: int) -> dict:
+    """Load all token arrays from .tar shards, wrap with BOS/EOS."""
+    urls = sorted(str(p) for p in Path(tokens_dir).glob("*.tar"))
     if not urls:
         raise ValueError(f"No tar files found in {tokens_dir}")
 
-    print(f"\nLoading tokens from {len(urls)} tar files...")
-
+    print(f"Loading tokens from {len(urls)} tar files...")
     tokens_dict = {}
-    dataset = wds.WebDataset(urls, shardshuffle=False).decode()  # type: ignore
 
-    for sample in dataset:
-        key = sample["__key__"]  # This is the file_id
-        tokens = sample.get("tokens.npy")
-
-        if tokens is None:
-            print(f"Warning: No tokens found for {key}")
+    for sample in wds.WebDataset(urls, shardshuffle=False).decode():  # type: ignore
+        key = sample["__key__"]
+        raw = sample.get("tokens.npy")
+        if raw is None:
             continue
-
-        # Add BOS/EOS and convert to tensor
-        token_list = [BOS_TOKEN_ID] + tokens.tolist() + [EOS_TOKEN_ID]
-        token_tensor = torch.tensor(token_list, dtype=torch.long)
-        tokens_dict[key] = token_tensor
+        token_list = [bos_token_id] + raw.tolist() + [eos_token_id]
+        tokens_dict[key] = torch.tensor(token_list, dtype=torch.long)
 
     print(f"Loaded {len(tokens_dict)} token sequences")
     return tokens_dict
 
 
-def evaluate_and_add_probabilities(
-    model, metadata_df: pl.DataFrame, tokens_dict: dict, device: str
-) -> pl.DataFrame:
-    """Calculate log probabilities for all samples."""
+def add_log_probabilities(model, df: pl.DataFrame, tokens_dict: dict, device: str) -> pl.DataFrame:
+    """Score every sample in df, return df with log_prob columns added."""
     print("\nCalculating log probabilities...")
-    
-    total = len(metadata_df)
+
+    total = len(df)
     log_probs, log_probs_norm, seq_lengths = [], [], []
     missing = 0
     start_time = time.time()
     log_interval = max(1, total // 20)
 
-    for idx, row in enumerate(metadata_df.iter_rows(named=True), 1):
-        file_id = row["file_id"]
-
-        # Get tokens for this file_id
-        tokens = tokens_dict.get(file_id)
+    for idx, row in enumerate(df.iter_rows(named=True), 1):
+        tokens = tokens_dict.get(row["file_id"])
 
         if tokens is None:
-            print(f"Warning: No tokens found for {file_id}")
             log_probs.append(None)
             log_probs_norm.append(None)
             seq_lengths.append(None)
             missing += 1
             continue
 
-        # Calculate log probability (both unnormalized and normalized)
-        log_prob, log_prob_norm, num_tokens = calculate_sequence_log_probability(
-            model, tokens, device
-        )
-        log_probs.append(log_prob)
-        log_probs_norm.append(log_prob_norm)
-        seq_lengths.append(num_tokens)
+        lp, lpn, n = calculate_sequence_log_probability(model, tokens, device)
+        log_probs.append(lp)
+        log_probs_norm.append(lpn)
+        seq_lengths.append(n)
 
-        # Progress logging
         if idx % log_interval == 0 or idx == total:
             elapsed = time.time() - start_time
             rate = idx / elapsed
             remaining = (total - idx) / rate if rate > 0 else 0
-            pct = 100 * idx / total
+            print(f"  {idx}/{total} ({100*idx/total:.0f}%) | "
+                  f"{rate:.1f} s/s | ETA {remaining/60:.1f}m")
 
-            print(
-                f"  {idx}/{total} ({pct:.1f}%) | "
-                f"Rate: {rate:.1f} s/s | "
-                f"Elapsed: {elapsed/60:.1f}m | "
-                f"ETA: {remaining/60:.1f}m"
-            )
+    if missing:
+        print(f"Warning: {missing}/{total} samples had no tokens")
 
-    if missing > 0:
-        print(f"Warning: {missing} samples missing tokens")
-
-    # Add log_prob columns to dataframe
-    df_with_probs = metadata_df.with_columns(
-        [
-            pl.Series("log_prob", log_probs),
-            pl.Series("log_prob_norm", log_probs_norm),
-            pl.Series("num_tokens", seq_lengths),
-        ]
+    return df.with_columns(
+        pl.Series("log_prob", log_probs),
+        pl.Series("log_prob_norm", log_probs_norm),
+        pl.Series("num_tokens", seq_lengths),
     )
 
-    total_time = time.time() - start_time
-    print(
-        f"✓ Calculated {len(log_probs) - missing} log probabilities in {total_time/60:.1f} minutes"
-    )
-    return df_with_probs
 
+# ============================================================================
+# Analysis
+# ============================================================================
+
+
+def discrimination_accuracy(
+    df: pl.DataFrame,
+    prob_column: str = "log_prob",
+    group_column: str = "group_id",
+) -> float:
+    """Proportion of groups where positives beat negatives.
+
+    For each group, computes: mean over positives of (fraction of negatives beaten).
+    Returns macro-average across groups. Works with N-positive × M-negative.
+    """
+    accuracies = []
+
+    for group_id in df[group_column].unique().to_list():
+        group = df.filter(pl.col(group_column) == group_id)
+        pos = group.filter(pl.col("positive"))[prob_column].drop_nulls().to_list()
+        neg = group.filter(~pl.col("positive"))[prob_column].drop_nulls().to_list()
+
+        if not pos or not neg:
+            continue
+
+        scores = [sum(p > n for n in neg) / len(neg) for p in pos]
+        accuracies.append(sum(scores) / len(scores))
+
+    return sum(accuracies) / len(accuracies) if accuracies else 0.0
+
+
+def per_voice_accuracy(
+    df: pl.DataFrame, prob_column: str = "log_prob", group_column: str = "group_id"
+) -> dict[str, float]:
+    """Break down accuracy by voice (requires 'voice' column)."""
+    results = {}
+    for voice in sorted(df["voice"].unique().to_list()):
+        subset = df.filter(pl.col("voice") == voice)
+        results[voice] = discrimination_accuracy(subset, prob_column, group_column)
+    return results
+
+
+# ============================================================================
+# Path helpers
+# ============================================================================
+
+ROOT = Path.cwd()
+
+def find_latest_checkpoint(model_dir: Path) -> Path:
+    """Return the checkpoint subdirectory with the highest step number."""
+    checkpoints = sorted(
+        model_dir.glob("checkpoint-*"),
+        key=lambda p: int(p.name.split("-")[-1]),
+    )
+    if not checkpoints:
+        raise FileNotFoundError(f"No checkpoints found in {model_dir}")
+    return checkpoints[-1]
+
+
+def resolve_paths(dataset: str, encoder: str, model: str):
+    """Derive all paths from the three user-provided names."""
+    metadata = ROOT / "metadata" / f"{dataset}.parquet"
+    tokens_dir = ROOT / "tokens" / f"{dataset}_{encoder}"
+    model_dir = ROOT / "weights" / encoder / model
+    output = ROOT / "metadata" / f"{dataset}_{encoder}_{model}.parquet"
+    return metadata, tokens_dir, model_dir, output
+
+
+def print_analysis(df_scored: pl.DataFrame, output_path: Path):
+    """Print discrimination accuracy results."""
+    group_col = "group_id" if "group_id" in df_scored.columns else "word_id"
+
+    print(f"\n{'=' * 60}")
+    print("DISCRIMINATION ACCURACY")
+    print(f"{'=' * 60}")
+    print(f"  Source:  {output_path}")
+    print(f"  Samples: {len(df_scored)}")
+    print(f"  Groups:  {df_scored[group_col].n_unique()} (column: {group_col})")
+
+    for label, col in [("Raw", "log_prob"), ("Normalized", "log_prob_norm")]:
+        if col not in df_scored.columns:
+            continue
+        acc = discrimination_accuracy(df_scored, col, group_col)
+        print(f"\n  {label}: {acc:.4f}")
+
+        if "voice" in df_scored.columns:
+            for voice, vacc in per_voice_accuracy(df_scored, col, group_col).items():
+                print(f"    {voice:<12s} {vacc:.4f}")
+
+    print(f"\n{'=' * 60}")
+
+
+# ============================================================================
+# CLI
+# ============================================================================
 
 if __name__ == "__main__":
-    config = {
-        "metadata_path": "/scratch2/ddager/rapp/metadata/swuggy.parquet",
-        "tokens_dir": "/scratch2/ddager/rapp/tokens/swuggy_spidr_base",
-        "checkpoint_path": "/scratch2/ddager/rapp/weights/gpt2_e768_l12_h12/checkpoint-8200",
-        "output_path": "/scratch2/ddager/rapp/metadata/swuggy_evaluated.parquet",
-        "device": "cuda" if torch.cuda.is_available() else "cpu",
-    }
+    import argparse
 
-    # Load data and model
-    print("Loading metadata...")
-    df = pl.read_parquet(config["metadata_path"])
+    parser = argparse.ArgumentParser(
+        description="Score samples with log-probs and compute discrimination accuracy. "
+                    "Skips scoring if output already exists.")
+    parser.add_argument("--encoder", type=str, required=True,
+                        help="Encoder name (e.g. spidr_base, hubert-500, mhubert)")
+    parser.add_argument("model", type=str, nargs="?", default=None,
+                        help="Model directory name under weights/{encoder}/... "
+                             "(e.g. lstm_h256_l2_d0.0_09feb13). Latest checkpoint is used.")
+    parser.add_argument("--dataset", type=str, default="swuggy",
+                        help="Dataset name (default: swuggy). "
+                             "Reads metadata/{dataset}.parquet, tokens from tokens/{dataset}_{encoder}/")
+    parser.add_argument("--force", action="store_true",
+                        help="Re-score even if output parquet exists")
+    args = parser.parse_args()
     
+    if args.model is None:
+        parser.error("model argument is required")
+
+    metadata_path, tokens_dir, model_dir, output_path = \
+        resolve_paths(args.dataset, args.encoder, args.model)
+
+    # ── Check for existing results ───────────────────────────────
+    if output_path.exists() and not args.force:
+        print(f"Found existing results: {output_path}")
+        print("Skipping scoring, running analysis only. Use --force to re-score.\n")
+        df_scored = pl.read_parquet(output_path)
+        print_analysis(df_scored, output_path)
+        raise SystemExit(0)
+
+    # ── Full evaluation run ──────────────────────────────────────
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    checkpoint_path = find_latest_checkpoint(model_dir)
+
+    print(f"{'=' * 60}")
+    print("EVALUATE + ANALYSE")
+    print(f"{'=' * 60}")
+    print(f"  Dataset:    {args.dataset}")
+    print(f"  Encoder:    {args.encoder}")
+    print(f"  Model dir:  {model_dir}")
+    print(f"  Checkpoint: {checkpoint_path.name}")
+    print(f"  Metadata:   {metadata_path}")
+    print(f"  Tokens:     {tokens_dir}")
+    print(f"  Output:     {output_path}")
+    print(f"  Device:     {device}")
+    print(f"{'=' * 60}\n")
+
+    # Load model
     print("Loading model...")
-    model, model_config = load_checkpoint(config["checkpoint_path"], config["device"])
-    
-    model_info = {
-        "type": model_config.model_type,
-        "n_params": sum(p.numel() for p in model.parameters()),
-    }
-    print_evaluation_summary(config, len(df), model_info)
+    model, model_config = load_checkpoint(str(checkpoint_path), device)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"  {model_config.model_type.upper()} | {n_params/1e6:.1f}M params")
 
-    # Evaluate
-    tokens_dict = load_tokens_from_tar(config["tokens_dir"])
-    df_with_probs = evaluate_and_add_probabilities(model, df, tokens_dict, config["device"])
+    # Load data
+    print("Loading metadata...")
+    df = pl.read_parquet(metadata_path)
+    print(f"  {len(df)} samples")
 
-    # Save results
-    print(f"\nSaving to {config['output_path']}...")
-    df_with_probs.write_parquet(config["output_path"])
-    print(f"\n{'='*60}")
-    print("EVALUATION COMPLETE")
-    print(f"{'='*60}")
-    print(f"\nNext: python scripts/swuggy/analysis.py\n")
+    enc_config = get_encoder_config(args.encoder)
+    tokens_dict = load_tokens_from_tar(
+        str(tokens_dir), enc_config.bos_token_id, enc_config.eos_token_id)
+
+    # Score
+    run_start = time.time()
+    df_scored = add_log_probabilities(model, df, tokens_dict, device)
+    scoring_time = time.time() - run_start
+
+    # Save
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df_scored.write_parquet(output_path)
+
+    # ── Scoring summary ─────────────────────────────────────────
+    scored = df_scored.filter(pl.col("log_prob").is_not_null())
+    lp = scored["log_prob"]
+    lpn = scored["log_prob_norm"]
+    ntok = scored["num_tokens"]
+
+    print(f"\n{'=' * 60}")
+    print("SCORING SUMMARY")
+    print(f"{'=' * 60}")
+    print(f"  Samples:      {len(df)} total, {len(scored)} scored, "
+          f"{len(df) - len(scored)} missing tokens")
+    print(f"  Token stats:  min={ntok.min()}, median={ntok.median():.0f}, "
+          f"max={ntok.max()}, mean={ntok.mean():.1f}")
+    print(f"  Log-prob:     mean={lp.mean():.2f}, std={lp.std():.2f}")
+    print(f"  Log-prob/tok: mean={lpn.mean():.4f}, std={lpn.std():.4f}")
+    print(f"  Scoring time: {scoring_time:.1f}s ({len(scored)/scoring_time:.1f} samples/s)")
+    print(f"  Saved to:     {output_path}")
+
+    # ── Discrimination accuracy ──────────────────────────────────
+    print_analysis(df_scored, output_path)

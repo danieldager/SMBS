@@ -5,13 +5,20 @@
 #SBATCH --partition=erc-dupoux,gpu-p1,gpu-p2
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:3
+#SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=24:00:00
+#SBATCH --time=12:00:00
 
-# Get architecture from first argument (default: lstm)
-ARCH="${1:-lstm}"
+# Usage: sbatch scripts/train/run.slurm <encoder> [arch]
+# Example: sbatch scripts/train/run.slurm spidr_base gpt2
+
+ENCODER="${1:?Usage: sbatch scripts/train/run.slurm <encoder> [arch]}"
+ARCH="${2:-gpt2}"
+
+# Token directories derived from encoder name
+TRAIN_DIR="/scratch2/ddager/rapp/tokens/chunks30_${ENCODER}/"
+EVAL_DIR="/scratch2/ddager/rapp/tokens/chunks-eval_${ENCODER}/"
 
 # Extract number of GPUs from SLURM gres parameter
 NUM_GPUS=$(echo $SLURM_STEP_GPUS | tr "," "\n" | wc -l)
@@ -21,10 +28,17 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 export PYTHONUNBUFFERED=1
 # export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
+# Use SLURM job ID to avoid port collisions when multiple jobs run on same node
+MASTER_PORT=$((29500 + ($SLURM_JOB_ID % 100)))
+
 uv run --frozen torchrun \
     --nproc_per_node=$NUM_GPUS \
     --nnodes=1 \
+    --master_port=$MASTER_PORT \
     scripts/train/train.py \
-    $ARCH
+    --arch $ARCH \
+    --encoder "$ENCODER" \
+    --train_dir "$TRAIN_DIR" \
+    --eval_dir "$EVAL_DIR"
 
 echo "Completed at: $(date)"
