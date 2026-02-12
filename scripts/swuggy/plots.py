@@ -1,303 +1,232 @@
 """Generate comparison plots across models and encoders.
 
-Scans metadata/ for all evaluated parquet files and creates bar charts
-comparing discrimination accuracy across different encoder+model combinations.
+Creates a single unified bar chart showing all LSTM and GPT-2 models.
 
 Usage:
-    python scripts/swuggy/plots.py [--raw] [--dataset DATASET]
-    
-    # Compare all models for all datasets
-    python scripts/swuggy/plots.py
-    
-    # Use raw log-prob instead of normalized
-    python scripts/swuggy/plots.py --raw
-    
-    # Only plot specific dataset
-    python scripts/swuggy/plots.py --dataset swuggy
+    python scripts/swuggy/plots.py [--raw]
 """
 
-from pathlib import Path
 import re
-
+from datetime import datetime
+import numpy as np
 import polars as pl
+from pathlib import Path
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Set seaborn style
+sns.set_theme(style="whitegrid", palette="muted")
+sns.set_context("paper", font_scale=1.2)
 
 
-# ============================================================================
-# Analysis functions (shared with evaluate.py)
-# ============================================================================
-
-
-def discrimination_accuracy(
-    df: pl.DataFrame,
-    prob_column: str = "log_prob",
-    group_column: str = "group_id",
-) -> float:
-    """Proportion of groups where positives beat negatives.
-
-    For each group, computes: mean over positives of (fraction of negatives beaten).
-    Returns macro-average across groups. Works with N-positive × M-negative.
-    """
-    accuracies = []
-
-    for group_id in df[group_column].unique().to_list():
-        group = df.filter(pl.col(group_column) == group_id)
-        pos = group.filter(pl.col("positive"))[prob_column].drop_nulls().to_list()
-        neg = group.filter(~pl.col("positive"))[prob_column].drop_nulls().to_list()
-
-        if not pos or not neg:
-            continue
-
-        scores = [sum(p > n for n in neg) / len(neg) for p in pos]
-        accuracies.append(sum(scores) / len(scores))
-
-    return sum(accuracies) / len(accuracies) if accuracies else 0.0
-
-
-# ============================================================================
-# Plotting
-# ============================================================================
-
-
-def plot_accuracy(output_path: Path, df_scored: pl.DataFrame, group_col: str, 
-                 output_dir: Path = None):
-    """Generate and save a bar chart of discrimination accuracy for a single model.
+def discrimination_accuracy(df: pl.DataFrame, prob_column: str = "log_prob", 
+                           group_column: str = "group_id"):
+    """Calculate discrimination accuracy: proportion of groups where positives beat negatives."""
+    # Separate positive and negative examples
+    pos_df = df.filter(pl.col("positive")).select([group_column, prob_column]).drop_nulls()
+    neg_df = df.filter(~pl.col("positive")).select([group_column, prob_column]).drop_nulls()
     
-    Creates a figure showing raw and normalized accuracy with value labels.
+    # Join on group_id to create all positive-negative pairs
+    pairs = pos_df.join(neg_df, on=group_column, suffix="_neg")
     
-    Args:
-        output_path: Path object used to generate filename (uses .stem)
-        df_scored: DataFrame with log_prob and log_prob_norm columns
-        group_col: Column name for grouping (e.g., "group_id")
-        output_dir: Where to save figure (default: figures/)
-    """
-    try:
-        import matplotlib.pyplot as plt
-        import numpy as np
-    except ImportError:
-        print("  ⚠ Matplotlib not installed, skipping plot generation")
-        return
+    # Calculate: for each pair, is positive > negative?
+    pairs = pairs.with_columns((pl.col(prob_column) > pl.col(f"{prob_column}_neg")).alias("correct"))
     
-    if output_dir is None:
-        output_dir = Path.cwd() / "figures"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Group by group_id and positive example, calculate accuracy per positive
+    group_acc = pairs.group_by([group_column, prob_column]).agg(
+        pl.col("correct").mean().alias("pos_acc")
+    )
     
-    # Compute accuracies
-    raw_acc = discrimination_accuracy(df_scored, "log_prob", group_col)
-    norm_acc = discrimination_accuracy(df_scored, "log_prob_norm", group_col) \
-        if "log_prob_norm" in df_scored.columns else None
+    # Average across positive examples within each group, then across groups
+    final_acc = group_acc.group_by(group_column).agg(
+        pl.col("pos_acc").mean().alias("group_acc")
+    )
     
-    # Create figure
-    fig, ax = plt.subplots(figsize=(8, 6))
-    
-    x = np.array([0])
-    width = 0.35
-    
-    # Plot bars
-    bars1 = ax.bar(x - width/2, [raw_acc], width, label="Raw", color="#1f77b4")
-    if norm_acc is not None:
-        bars2 = ax.bar(x + width/2, [norm_acc], width, label="Length-normalized", color="#aec7e8")
-    
-    # Add value labels
-    ax.text(x[0] - width/2, raw_acc + 0.02, f"{raw_acc:.3f}", 
-            ha="center", va="bottom", fontsize=11, fontweight="bold")
-    if norm_acc is not None:
-        ax.text(x[0] + width/2, norm_acc + 0.02, f"{norm_acc:.3f}",
-                ha="center", va="bottom", fontsize=11, fontweight="bold")
-    
-    # Styling
-    model_name = output_path.stem  # e.g., swuggy_hubert-500_lstm_...
-    ax.set_ylabel("Accuracy", fontsize=12)
-    ax.set_title(f"Lexical Discrimination Accuracy\n{model_name}", fontsize=13)
-    ax.set_xticks([0])
-    ax.set_xticklabels([""])
-    ax.set_ylim(0, 1.0)
-    ax.axhline(0.5, color="gray", ls="--", lw=1, alpha=0.5, label="Chance")
-    ax.legend(loc="lower right")
-    ax.grid(axis="y", alpha=0.3)
-    plt.tight_layout()
-    
-    # Save
-    figure_path = output_dir / f"{output_path.stem}.png"
-    plt.savefig(figure_path, dpi=300, bbox_inches="tight")
-    plt.close()
-    
-    print(f"  Plot saved:   {figure_path}")
+    return final_acc["group_acc"].mean() if len(final_acc) > 0 else 0.0
 
 
-def plot_dataset_comparison(dataset: str, results: dict[str, Path], 
-                           use_raw: bool = False, output_dir: Path = None):
-    """Create bar chart comparing models for a single dataset.
+def parse_model_info(filepath: Path):
+    """Extract encoder, architecture, and size from parquet filename."""
+    # e.g., spidr_base_lstm_h256_l2_d0.0.parquet
+    # or   hubert-500_gpt2_e768_l12_h12_09feb13.parquet
+    stem = filepath.stem
     
-    Args:
-        dataset: Dataset name (e.g., "swuggy")
-        results: {model_label: parquet_path} dict
-        use_raw: Use raw log_prob instead of log_prob_norm
-        output_dir: Where to save figure (default: figures/)
-    """
-    import matplotlib.pyplot as plt
-    import numpy as np
+    # Determine architecture by searching for keywords
+    if "lstm" in stem:
+        arch = "lstm"
+        # Extract hidden size
+        match = re.search(r"_h(\d+)", stem)
+        size = int(match.group(1)) if match else 0
+    elif "gpt2" in stem:
+        arch = "gpt2"
+        # Extract embedding size
+        match = re.search(r"_e(\d+)", stem)
+        size = int(match.group(1)) if match else 0
+    else:
+        return None, "unknown", 0
     
-    if output_dir is None:
-        output_dir = Path.cwd() / "figures"
+    # Extract encoder name (everything before arch keyword)
+    if arch == "lstm":
+        encoder = stem.split("_lstm")[0]
+    elif arch == "gpt2":
+        encoder = stem.split("_gpt2")[0]
+    else:
+        encoder = "unknown"
+    
+    return encoder, arch, size
+
+
+def create_unified_plot(metadata_dir: Path, output_dir: Path, use_raw: bool = False):
+    """Create single plot comparing all models across all encoders."""
     output_dir.mkdir(parents=True, exist_ok=True)
     
     prob_col = "log_prob" if use_raw else "log_prob_norm"
     
-    # Compute accuracies for each model
-    model_names = []
-    accuracies = []
+    # Collect all models
+    models = []
     
-    for label, path in sorted(results.items()):
-        df = pl.read_parquet(path)
-        
-        # Detect grouping column
-        group_col = "group_id" if "group_id" in df.columns else "word_id"
-        
-        # Skip if this result doesn't have the requested prob column
-        if prob_col not in df.columns:
-            print(f"  Skipping {label}: missing {prob_col} column")
-            continue
-        
-        acc = discrimination_accuracy(df, prob_col, group_col)
-        model_names.append(label)
-        accuracies.append(acc)
-    
-    if not accuracies:
-        print(f"  No valid results found for {dataset}")
-        return
-    
-    # Create figure
-    fig, ax = plt.subplots(figsize=(max(8, len(model_names) * 1.5), 6))
-    
-    x = np.arange(len(model_names))
-    bars = ax.bar(x, accuracies, color="#1f77b4", alpha=0.8)
-    
-    # Value labels on bars
-    for i, (bar, acc) in enumerate(zip(bars, accuracies)):
-        height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width() / 2, height + 0.01,
-                f"{acc:.3f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
-    
-    # Styling
-    prob_type = "Raw" if use_raw else "Length-Normalized"
-    ax.set_ylabel("Accuracy", fontsize=12)
-    ax.set_title(f"Lexical Discrimination Accuracy: {dataset}\n({prob_type})", fontsize=14)
-    ax.set_xticks(x)
-    ax.set_xticklabels(model_names, rotation=45, ha="right", fontsize=9)
-    ax.set_ylim(0, 1.0)
-    ax.axhline(0.5, color="gray", ls="--", lw=1, alpha=0.5, label="Chance")
-    ax.legend(loc="lower right")
-    ax.grid(axis="y", alpha=0.3)
-    plt.tight_layout()
-    
-    # Save
-    suffix = "_raw" if use_raw else ""
-    output_path = output_dir / f"{dataset}_comparison{suffix}.png"
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close()
-    
-    print(f"  ✓ Saved: {output_path}")
-
-
-# ============================================================================
-# File discovery
-# ============================================================================
-
-
-def find_evaluated_results(metadata_dir: Path = None) -> dict[str, dict[str, Path]]:
-    """Scan metadata directory for evaluated parquet files.
-    
-    Returns nested dict: {dataset: {encoder_model: path}}
-    
-    Parses filenames like: swuggy_hubert-500_lstm_h256_l2_d0.0_09feb13.parquet
-    """
-    if metadata_dir is None:
-        metadata_dir = Path.cwd() / "metadata"
-    
-    # Pattern: {dataset}_{encoder}_{model}.parquet
-    # We need at least 3 underscore-separated parts
-    pattern = re.compile(r"^(.+?)_([^_]+)_(.+)\.parquet$")
-    
-    results = {}
-    
-    for path in metadata_dir.glob("*.parquet"):
-        match = pattern.match(path.name)
-        if not match:
-            continue
-        
-        dataset, encoder, model = match.groups()
-        
-        # Skip raw metadata files (those without model suffix)
-        # Check if file has required columns for evaluated results
+    for parquet_file in metadata_dir.glob("*.parquet"):
+        # Read and check if it's an evaluated result
         try:
-            df = pl.read_parquet(path)
-            if "log_prob" not in df.columns:
-                continue  # Not an evaluated result
+            df = pl.read_parquet(parquet_file)
+            if prob_col not in df.columns or "positive" not in df.columns:
+                continue
         except Exception:
             continue
         
-        # Group by dataset
-        if dataset not in results:
-            results[dataset] = {}
+        # Parse model info
+        encoder, arch, size = parse_model_info(parquet_file)
         
-        # Label: encoder + architecture (e.g., "hubert-500_lstm" or "spidr_base_gpt2")
-        # Extract architecture from model name (e.g., "lstm_h256_l2_d0.0_09feb13" -> "lstm")
-        arch = model.split("_")[0]  # First component is the architecture
-        label = f"{encoder}_{arch}"
-        results[dataset][label] = path
+        # Skip if not LSTM or GPT2
+        if arch not in ["lstm", "gpt2"]:
+            continue
+        
+        # Calculate accuracy
+        group_col = "group_id" if "group_id" in df.columns else "word_id"
+        accuracy = discrimination_accuracy(df, prob_col, group_col)
+        
+        models.append({
+            "encoder": encoder,
+            "arch": arch,
+            "size": size,
+            "accuracy": accuracy,
+            "filename": parquet_file.stem
+        })
     
-    return results
-
-
-# ============================================================================
-# CLI
-# ============================================================================
+    if not models:
+        print("No valid models found")
+        return
+    
+    # Sort: LSTMs first (by encoder, size), then GPT2s (by encoder, size)
+    lstm_models = sorted([m for m in models if m["arch"] == "lstm"], 
+                        key=lambda x: (x["encoder"], x["size"]))
+    gpt2_models = sorted([m for m in models if m["arch"] == "gpt2"], 
+                        key=lambda x: (x["encoder"], x["size"]))
+    all_models = lstm_models + gpt2_models
+    
+    # Prepare plot data
+    labels = []
+    accuracies = []
+    colors = []
+    
+    encoder_colors = {
+        "spidr_base": "#2E86AB",
+        "spidr": "#2E86AB", 
+        "hubert-500": "#A23B72",
+        "mhubert": "#F18F01",
+    }
+    
+    for model in all_models:
+        if model["arch"] == "lstm":
+            labels.append(f"{model['encoder']}\nh={model['size']}")
+        else:
+            labels.append(f"{model['encoder']}\ne={model['size']}")
+        
+        accuracies.append(model["accuracy"])
+        colors.append(encoder_colors.get(model["encoder"], "#808080"))
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(max(12, len(all_models) * 0.9), 8))
+    
+    # Create custom x positions with tighter spacing within groups, larger gap between
+    x_positions = []
+    current_x = 0
+    for i, model in enumerate(all_models):
+        x_positions.append(current_x)
+        # If next model is different architecture, add extra gap
+        if i < len(all_models) - 1 and all_models[i]["arch"] != all_models[i+1]["arch"]:
+            current_x += 1.0 + 0.25  # bar width + extra gap
+        else:
+            current_x += 1.0  # normal spacing within group
+    
+    x = np.array(x_positions)
+    bars = ax.bar(x, accuracies, color=colors, alpha=0.85, edgecolor="black", linewidth=0.5, width=0.8)
+    
+    # Add accuracy labels on bars
+    for bar, acc in zip(bars, accuracies):
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width() / 2, height + 0.008,
+               f"{acc:.3f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+    
+    # Style plot
+    prob_type = "Raw" if use_raw else "Length-Normalized"
+    ax.set_ylabel("Discrimination Accuracy", fontsize=14, fontweight="bold")
+    ax.set_title(f"Lexical Discrimination\n({prob_type} Log-Probability)", 
+                fontsize=16, fontweight="bold", pad=20)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_ylim(0, 1.05)
+    
+    # Add architecture labels below x-axis
+    lstm_x_center = x[:len(lstm_models)].mean()
+    gpt2_x_center = x[len(lstm_models):].mean()
+    ax.text(lstm_x_center, -0.09, "LSTM", ha="center", va="top", fontsize=13, 
+           fontweight="bold", transform=ax.get_xaxis_transform())
+    ax.text(gpt2_x_center, -0.09, "GPT-2", ha="center", va="top", fontsize=13,
+           fontweight="bold", transform=ax.get_xaxis_transform())
+    ax.axhline(0.5, color="red", ls=":", lw=2, alpha=0.7, label="Chance (50%)")
+    
+    # Create legend
+    from matplotlib.patches import Patch
+    from matplotlib.lines import Line2D
+    legend_elements = []
+    for encoder in sorted(set(m["encoder"] for m in all_models)):
+        color = encoder_colors.get(encoder, "#808080")
+        legend_elements.append(Patch(facecolor=color, edgecolor="black", label=encoder))
+    legend_elements.append(Line2D([0], [0], color="red", ls=":", lw=2, label="Chance"))  # type: ignore 
+    
+    ax.legend(handles=legend_elements, loc="lower right", framealpha=0.95, fontsize=11)
+    ax.grid(axis="y", alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save with timestamp
+    timestamp = datetime.now().strftime("%b%d").lower()  # e.g., "feb12"
+    suffix = "_raw" if use_raw else ""
+    output_path = output_dir / f"lexical_discrimination_{timestamp}{suffix}.png"
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    
+    print(f"✓ Saved unified plot: {output_path}")
+    print(f"  Models included: {len(all_models)} ({len(lstm_models)} LSTM, {len(gpt2_models)} GPT-2)")
 
 
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(
-        description="Generate comparison plots for lexical discrimination results")
+    parser = argparse.ArgumentParser(description="Generate unified comparison plot")
     parser.add_argument("--raw", action="store_true",
-                        help="Use raw log_prob instead of length-normalized")
-    parser.add_argument("--dataset", type=str, default=None,
-                        help="Only plot specific dataset (default: plot all)")
-    parser.add_argument("--metadata-dir", type=str, default=None,
-                        help="Metadata directory (default: ./metadata)")
-    parser.add_argument("--output-dir", type=str, default=None,
-                        help="Output directory for figures (default: ./figures)")
+                       help="Use raw log_prob instead of normalized (default: normalized)")
     args = parser.parse_args()
     
-    metadata_dir = Path(args.metadata_dir) if args.metadata_dir else Path.cwd() / "metadata"
-    output_dir = Path(args.output_dir) if args.output_dir else Path.cwd() / "figures"
+    metadata_dir = Path.cwd() / "metadata" / "swuggy"
+    output_dir = Path.cwd() / "figures"
     
-    print(f"Scanning {metadata_dir} for evaluated results...")
-    results = find_evaluated_results(metadata_dir)
+    print(f"Scanning {metadata_dir} for models...")
     
-    if not results:
-        print("No evaluated results found.")
-        print("Run evaluate.py first to generate results.")
-        raise SystemExit(1)
+    prob_type = "raw" if args.raw else "normalized"
+    print(f"Creating unified plot ({prob_type} log-probability)...\n")
     
-    print(f"Found {len(results)} dataset(s):")
-    for dataset, models in results.items():
-        print(f"  {dataset}: {len(models)} model(s)")
-    print()
+    create_unified_plot(metadata_dir, output_dir, args.raw)
     
-    # Filter by dataset if requested
-    if args.dataset:
-        if args.dataset not in results:
-            print(f"Dataset '{args.dataset}' not found in results.")
-            raise SystemExit(1)
-        results = {args.dataset: results[args.dataset]}
-    
-    # Generate plots
-    prob_type = "raw log-prob" if args.raw else "normalized log-prob"
-    print(f"Generating comparison plots ({prob_type})...")
-    
-    for dataset, models in results.items():
-        print(f"\n{dataset}:")
-        plot_dataset_comparison(dataset, models, args.raw, output_dir)
-    
-    print(f"\nAll plots saved to {output_dir}")
+    print(f"\nPlot saved to {output_dir}")

@@ -24,7 +24,6 @@ import torch
 import webdataset as wds
 
 from scripts.encode.encoders import get_encoder_config
-from scripts.swuggy.plots import plot_accuracy
 from scripts.swuggy.utils import load_checkpoint
 
 
@@ -189,7 +188,7 @@ def resolve_paths(dataset: str, encoder: str, model: str):
     metadata = ROOT / "metadata" / f"{dataset}.parquet"
     tokens_dir = ROOT / "tokens" / f"{dataset}_{encoder}"
     model_dir = ROOT / "weights" / encoder / model
-    output = ROOT / "metadata" / f"{dataset}_{encoder}_{model}.parquet"
+    output = ROOT / "metadata" / "swuggy" / f"{encoder}_{model}.parquet"
     return metadata, tokens_dir, model_dir, output
 
 
@@ -252,7 +251,6 @@ if __name__ == "__main__":
         df_scored = pl.read_parquet(output_path)
         group_col = "group_id" if "group_id" in df_scored.columns else "word_id"
         print_analysis(df_scored, output_path)
-        plot_accuracy(output_path, df_scored, group_col)
         raise SystemExit(0)
 
     # ── Full evaluation run ──────────────────────────────────────
@@ -317,6 +315,3 @@ if __name__ == "__main__":
     # ── Discrimination accuracy ──────────────────────────────────
     group_col = "group_id" if "group_id" in df_scored.columns else "word_id"
     print_analysis(df_scored, output_path)
-    
-    # ── Generate plot ────────────────────────────────────────────
-    plot_accuracy(output_path, df_scored, group_col)

@@ -6,8 +6,8 @@ import torch
 
 
 def get_model_timestamp():
-    """Get timestamp for model naming (format: DDmmmHH, e.g., 03feb14)."""
-    return datetime.now().strftime("%d%b%H").lower()
+    """Get timestamp for model naming (format: mmmDD, e.g., feb03)."""
+    return datetime.now().strftime("%b%d").lower()
 
 
 def find_latest_model_dir(base_pattern, encoder, weights_dir="./weights"):

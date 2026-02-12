@@ -35,8 +35,7 @@ echo ""
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 export PYTHONUNBUFFERED=1
 
-# Legacy encoders (mhubert, hubert-500, etc.) need the textless conda env.
-# SPIDR-based encoders use uv.
+# SPIDR-based encoders use main uv environment
 if [ "$ENCODER" = "spidr_base" ]; then
     uv run --frozen scripts/encode/encode.py \
         --encoder "$ENCODER" \
@@ -44,10 +43,9 @@ if [ "$ENCODER" = "spidr_base" ]; then
         --task-id "$TASK_ID" \
         --num-tasks "$NUM_TASKS" \
         --device cuda
+# Legacy encoders (mhubert, hubert-500) use separate textless uv environment
 else
-    source ~/.bashrc
-    conda activate textless
-    python -u scripts/encode/encode.py \
+    uv run --project envs/textless --frozen scripts/encode/encode.py \
         --encoder "$ENCODER" \
         --manifest "$MANIFEST" \
         --task-id "$TASK_ID" \

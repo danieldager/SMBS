@@ -50,5 +50,5 @@ def load_checkpoint(checkpoint_path: str, device: str = "cuda") -> Tuple[Any, An
     model.to(device)  # type: ignore
     model.eval()
 
-    print(f"✓ Loaded {model_type} model from {checkpoint_path}")
+    print(f"Loaded {model_type} model from {checkpoint_path}")
     return model, config

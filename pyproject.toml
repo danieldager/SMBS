@@ -17,4 +17,6 @@ dependencies = [
     "webdataset>=1.0.2",
     "transformers[torch]>=4.57.6",
     "kaleido>=1.2.0",
+    "matplotlib>=3.10.8",
+    "seaborn>=0.13.2",
 ]

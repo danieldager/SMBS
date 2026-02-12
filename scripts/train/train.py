@@ -42,97 +42,16 @@ from scripts.train.datasets import (
     MAX_TOKENS,
 )
 
-from scripts.train.models import LSTM, LSTMConfig
+from scripts.train.models import (
+    LSTM_MODEL_CONFIG, 
+    LSTM_TRAINING_CONFIG,
+    GPT2_MODEL_CONFIG,
+    GPT2_TRAINING_CONFIG,
+    LSTM, LSTMConfig
+)
+
 from scripts.train.utils import print_training_summary, get_model_timestamp
 from scripts.encode.encoders import get_encoder_config
-
-
-# ============================================================================
-# MODEL & TRAINING CONFIGURATIONS
-# ============================================================================
-
-LSTM_MODEL_CONFIG = {
-    "embedding_dim": 256,
-    "hidden_size": 256,
-    "num_layers": 2,
-    "dropout": 0.0,
-}
-
-LSTM_TRAINING_CONFIG = {
-    "overwrite_output_dir": True,
-    "disable_tqdm": True,
-    "per_device_train_batch_size": 32,
-    "gradient_accumulation_steps": 1,
-    # NOTE: optim/lr/betas are set via custom torch.optim.Adam (not AdamW)
-    # These values are read from TrainingArguments by the custom optimizer
-    "learning_rate": 1e-2,
-    "adam_beta1": 0.9,
-    "adam_beta2": 0.99,
-    "max_grad_norm": 5.0,
-    "lr_scheduler_type": "constant",
-    "warmup_steps": 0,
-    "max_steps": 100000,
-    "bf16": True,
-    "dataloader_num_workers": 4,
-    "logging_steps": 100,
-    "save_strategy": "steps",
-    "save_steps": 1000,
-    "save_total_limit": 3,
-    "eval_strategy": "steps",
-    "eval_steps": 1000,
-    "metric_for_best_model": "eval_loss",
-    "greater_is_better": False,
-    "load_best_model_at_end": True,
-    "ddp_find_unused_parameters": False,
-    "remove_unused_columns": False,
-    "label_names": ["labels"],
-    "ignore_data_skip": True,
-}
-
-GPT2_MODEL_CONFIG = {
-    "n_positions": MAX_TOKENS,
-    "n_ctx": MAX_TOKENS,
-    "n_embd": 768,
-    "n_layer": 12,
-    "n_head": 12,
-    "n_inner": 3072,
-    "activation_function": "gelu_new",
-    "loss_type": "ForCausalLMLoss",
-    "resid_pdrop": 0.0,
-    "embd_pdrop": 0.0,
-    "attn_pdrop": 0.0,
-}
-
-GPT2_TRAINING_CONFIG = {
-    "overwrite_output_dir": True,
-    "disable_tqdm": True,
-    "per_device_train_batch_size": 32,
-    "gradient_accumulation_steps": 4,
-    "optim": "adamw_torch",
-    "learning_rate": 1e-4,
-    "adam_beta1": 0.9,
-    "adam_beta2": 0.98,
-    "max_grad_norm": 0.0,
-    "weight_decay": 0.01,
-    "lr_scheduler_type": "inverse_sqrt",
-    "warmup_steps": 1000,
-    "max_steps": 100000,
-    "bf16": True,
-    "dataloader_num_workers": 4,
-    "logging_steps": 100,
-    "save_strategy": "steps",
-    "save_steps": 1000,
-    "save_total_limit": 3,
-    "eval_strategy": "steps",
-    "eval_steps": 1000,
-    "metric_for_best_model": "eval_loss",
-    "greater_is_better": False,
-    "load_best_model_at_end": True,
-    "ddp_find_unused_parameters": False,
-    "remove_unused_columns": False,
-    "label_names": ["labels"],
-    "ignore_data_skip": True,
-}
 
 
 # --- CUSTOM CALLBACK FOR LOGGING ---
@@ -220,15 +139,14 @@ if __name__ == "__main__":
         model = LSTM(config)
         base_name = f"lstm_h{config.hidden_size}_l{config.num_layers}_d{config.dropout}_{timestamp}"
         training_config = LSTM_TRAINING_CONFIG
-        early_stopping_patience = 5
     elif args.arch == "gpt2":
-        config = GPT2Config(**GPT2_MODEL_CONFIG, **vocab_kwargs)
+        config = GPT2Config(**GPT2_MODEL_CONFIG, **vocab_kwargs)  # type: ignore
         model = GPT2LMHeadModel(config)
         base_name = f"gpt2_e{config.n_embd}_l{config.n_layer}_h{config.n_head}_{timestamp}"
         training_config = GPT2_TRAINING_CONFIG.copy()
-        early_stopping_patience = 5
-        if enc_config.vocab_size > 1000: # Reduce batch size for large vocab size
+        if enc_config.vocab_size > 1000:
             training_config["per_device_train_batch_size"] = 16
+            training_config["gradient_accumulation_steps"] = 8
     else:
         raise ValueError(f"Unsupported architecture: {args.arch}")
     
@@ -241,13 +159,14 @@ if __name__ == "__main__":
     # Create custom optimizer for LSTM
     # Adam (not AdamW) is critical for LSTM convergence - see debug results
     if args.arch == "lstm":
-        optimizer = torch.optim.Adam(
-            model.parameters(),
-            lr=training_args.learning_rate,
-            betas=(training_args.adam_beta1, training_args.adam_beta2),
-            eps=training_args.adam_epsilon,
-        )
-        optimizers = (optimizer, None)
+        # optimizer = torch.optim.Adam(
+        #     model.parameters(),
+        #     lr=training_args.learning_rate,
+        #     betas=(training_args.adam_beta1, training_args.adam_beta2),
+        #     eps=training_args.adam_epsilon,
+        # )
+        # optimizers = (optimizer, None)
+        optimizers = (None, None)
     elif args.arch == "gpt2":
         optimizers = (None, None)
 
@@ -261,7 +180,7 @@ if __name__ == "__main__":
         optimizers=optimizers,
         callbacks=[
             CustomCallback(use_lstm=(args.arch == "lstm")),
-            EarlyStoppingCallback(early_stopping_patience=early_stopping_patience),
+            EarlyStoppingCallback(early_stopping_patience=3),
         ],
     )
     trainer.pop_callback(PrinterCallback)

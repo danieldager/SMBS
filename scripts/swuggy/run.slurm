@@ -45,16 +45,14 @@ echo "Started: $(date)"
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 export PYTHONUNBUFFERED=1
 
-# Plots script doesn't use encoder-specific environment
-if [ "$SCRIPT_NAME" = "plots" ]; then
+# Only prepare_swuggy with legacy encoders needs the textless environment
+if [ "$SCRIPT_NAME" = "prepare_swuggy" ] && [ "$ENCODER" != "spidr_base" ]; then
+    uv run --project envs/textless --frozen "$SCRIPT_PATH" --encoder "$ENCODER" "$@"
+# Everything else uses main uv environment
+elif [ "$SCRIPT_NAME" = "plots" ]; then
     uv run --frozen "$SCRIPT_PATH" "$@"
-# Legacy encoders (mhubert, hubert-500) need the textless conda env
-elif [ "$ENCODER" = "spidr_base" ]; then
-    uv run --frozen "$SCRIPT_PATH" --encoder "$ENCODER" "$@"
 else
-    source ~/.bashrc
-    conda activate textless
-    python -u "$SCRIPT_PATH" --encoder "$ENCODER" "$@"
+    uv run --frozen "$SCRIPT_PATH" --encoder "$ENCODER" "$@"
 fi
 
 echo ""
