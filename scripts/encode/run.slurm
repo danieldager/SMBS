@@ -37,7 +37,7 @@ export PYTHONUNBUFFERED=1
 
 # SPIDR-based encoders use main uv environment
 if [ "$ENCODER" = "spidr_base" ]; then
-    uv run --frozen scripts/encode/encode.py \
+    uv run scripts/encode/encode.py \
         --encoder "$ENCODER" \
         --manifest "$MANIFEST" \
         --task-id "$TASK_ID" \
@@ -45,7 +45,7 @@ if [ "$ENCODER" = "spidr_base" ]; then
         --device cuda
 # Legacy encoders (mhubert, hubert-500) use separate textless uv environment
 else
-    uv run --project envs/textless --frozen scripts/encode/encode.py \
+    uv run --project envs/textless scripts/encode/encode.py \
         --encoder "$ENCODER" \
         --manifest "$MANIFEST" \
         --task-id "$TASK_ID" \

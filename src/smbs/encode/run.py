@@ -184,3 +184,20 @@ def run_encode(
             tracker.log_progress(counter, len(df))
 
     tracker.log_summary(task_id)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--encoder", required=True)
+    parser.add_argument("--dataset", required=True)
+    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--task-id", type=int, default=0)
+    parser.add_argument("--num-tasks", type=int, default=1)
+    args = parser.parse_args()
+
+    from smbs.utils.manifest import resolve_manifest
+
+    manifest_path = str(resolve_manifest(args.dataset))
+    run_encode(args.encoder, args.dataset, manifest_path, args.device, args.task_id, args.num_tasks)

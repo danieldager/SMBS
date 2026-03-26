@@ -25,7 +25,7 @@ echo "Grid search started at: $(date)"
 echo "GPUs: $NUM_GPUS | Node: $(hostname)"
 echo ""
 
-uv run --frozen torchrun \
+uv run torchrun \
     --nproc_per_node=$NUM_GPUS \
     --nnodes=1 \
     --master_port=$MASTER_PORT \

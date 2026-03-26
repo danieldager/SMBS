@@ -76,3 +76,13 @@ def run_scan(dataset_dir: str, workers: int | None = None) -> None:
                 print(f"  Written {i:,}/{len(paths):,} paths...")
 
     print(f"\nWrote {len(paths):,} paths to {output_path}")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("directory")
+    parser.add_argument("--workers", type=int, default=None)
+    args = parser.parse_args()
+    run_scan(args.directory, args.workers)

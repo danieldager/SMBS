@@ -2,7 +2,7 @@
 
 from smbs.encode.base import AudioEncoder, EncoderConfig
 from smbs.encode.spidr import SpidrEncoder
-from smbs.encode.textless import TextlessEncoder
+from smbs.encode.hubert import HuBERTEncoder
 
 # Maps encoder name → config + loader info
 ENCODER_REGISTRY: dict[str, dict] = {
@@ -11,13 +11,15 @@ ENCODER_REGISTRY: dict[str, dict] = {
         "n_tokens": 256,
     },
     "mhubert": {
-        "class": TextlessEncoder,
-        "model_str": "mhubert-base-vp_mls_cv_8lang/kmeans/2000",
+        "class": HuBERTEncoder,
+        "model_name": "mhubert-base-vp_mls_cv_8lang",
+        "vocab_size": 2000,
         "n_tokens": 2000,
     },
     "hubert-500": {
-        "class": TextlessEncoder,
-        "model_str": "hubert-base-ls960/kmeans/500",
+        "class": HuBERTEncoder,
+        "model_name": "hubert-base-ls960",
+        "vocab_size": 500,
         "n_tokens": 500,
     },
 }
@@ -48,8 +50,4 @@ def load_encoder(name: str, device: str = "cuda") -> AudioEncoder:
     return cls(device=device, **kwargs)
 
 
-def is_legacy_encoder(name: str) -> bool:
-    """Check if an encoder requires the legacy textless environment."""
-    if name not in ENCODER_REGISTRY:
-        return False
-    return ENCODER_REGISTRY[name]["class"] is TextlessEncoder
+

@@ -27,21 +27,15 @@ case "$ACTION" in
     prepare)
         ENCODER="${1:?Usage: ... prepare <encoder> <parquet_pattern>}"
         PATTERN="${2:?Usage: ... prepare <encoder> <parquet_pattern>}"
-
-        # Legacy encoders use textless environment
-        if [ "$ENCODER" = "spidr_base" ]; then
-            uv run --frozen smbs prepare-swuggy --encoder "$ENCODER" --parquet-pattern "$PATTERN"
-        else
-            uv run --project envs/textless --frozen smbs prepare-swuggy --encoder "$ENCODER" --parquet-pattern "$PATTERN"
-        fi
+        uv run python -m smbs.evaluate.swuggy prepare --encoder "$ENCODER" --parquet-pattern "$PATTERN"
         ;;
     evaluate)
         ENCODER="${1:?Usage: ... evaluate <encoder> <model>}"
         MODEL="${2:?Usage: ... evaluate <encoder> <model>}"
-        uv run --frozen smbs evaluate --encoder "$ENCODER" --model "$MODEL"
+        uv run python -m smbs.evaluate.swuggy evaluate --encoder "$ENCODER" --model "$MODEL"
         ;;
     plots)
-        uv run --frozen smbs plots
+        uv run python -m smbs.evaluate.plots
         ;;
     *)
         echo "Unknown action: $ACTION"

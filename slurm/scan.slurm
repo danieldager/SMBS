@@ -24,7 +24,7 @@ echo ""
 
 export PYTHONUNBUFFERED=1
 
-uv run --frozen smbs scan "$DATASET" --workers "$SLURM_CPUS_PER_TASK"
+uv run python -m smbs.scan "$DATASET" --workers "$SLURM_CPUS_PER_TASK"
 
 echo ""
 echo "Completed: $(date)"

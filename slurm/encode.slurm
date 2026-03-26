@@ -28,23 +28,12 @@ echo ""
 
 export PYTHONUNBUFFERED=1
 
-# SPIDR-based encoders use main uv environment
-if [ "$ENCODER" = "spidr_base" ]; then
-    uv run --frozen smbs encode \
-        --encoder "$ENCODER" \
-        --dataset "$DATASET" \
-        --device cuda \
-        --task-id "$TASK_ID" \
-        --num-tasks "$NUM_TASKS"
-# Legacy encoders (mhubert, hubert-500) use separate textless environment
-else
-    uv run --project envs/textless --frozen smbs encode \
-        --encoder "$ENCODER" \
-        --dataset "$DATASET" \
-        --device cuda \
-        --task-id "$TASK_ID" \
-        --num-tasks "$NUM_TASKS"
-fi
+uv run python -m smbs.encode.run \
+    --encoder "$ENCODER" \
+    --dataset "$DATASET" \
+    --device cuda \
+    --task-id "$TASK_ID" \
+    --num-tasks "$NUM_TASKS"
 
 echo ""
 echo "Task $TASK_ID completed: $(date)"

@@ -337,3 +337,27 @@ def run_evaluate(
     print(f"  Saved to:     {output_path}")
 
     print_analysis(df_scored, output_path)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="action", required=True)
+
+    p_prep = sub.add_parser("prepare")
+    p_prep.add_argument("--encoder", required=True)
+    p_prep.add_argument("--parquet-pattern", required=True)
+    p_prep.add_argument("--device", default="cuda")
+
+    p_eval = sub.add_parser("evaluate")
+    p_eval.add_argument("--encoder", required=True)
+    p_eval.add_argument("--model", required=True)
+    p_eval.add_argument("--dataset", default="swuggy")
+    p_eval.add_argument("--force", action="store_true")
+
+    args = parser.parse_args()
+    if args.action == "prepare":
+        prepare_swuggy(args.parquet_pattern, args.encoder, args.device)
+    else:
+        run_evaluate(args.encoder, args.model, args.dataset, args.force)

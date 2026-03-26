@@ -309,3 +309,19 @@ def run_tenvad(
     n_copied = copy_long_segment_files(meta_df, data_dir)
     if n_copied:
         print(f"Copied {n_copied} files with speech >= {LONG_SEGMENT_THRESHOLD}s to {data_dir}")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("manifest")
+    parser.add_argument("--hop-size", type=int, default=256)
+    parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--workers", type=int, default=None)
+    args = parser.parse_args()
+
+    from smbs.utils.manifest import resolve_manifest
+
+    manifest_path = str(resolve_manifest(args.manifest))
+    run_tenvad(manifest_path, args.hop_size, args.threshold, args.workers)

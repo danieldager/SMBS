@@ -32,7 +32,7 @@ export PYTHONUNBUFFERED=1
 # Use SLURM job ID to avoid port collisions when multiple jobs run on same node
 MASTER_PORT=$((29500 + ($SLURM_JOB_ID % 100)))
 
-uv run --frozen torchrun \
+uv run torchrun \
     --nproc_per_node=$NUM_GPUS \
     --nnodes=1 \
     --master_port=$MASTER_PORT \

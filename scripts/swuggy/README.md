@@ -301,7 +301,7 @@ The evaluation pipeline is fully generic — it just needs `group_id`, `file_id`
 
 The SLURM script automatically selects the correct Python environment based on encoder:
 
-- **`spidr_base`**: Uses `uv run --frozen` (main venv)
+- **`spidr_base`**: Uses `uv run` (main venv)
 - **`hubert-500`, `mhubert`**: Uses `conda activate textless` (legacy environment)
 
 This is transparent to the user — just specify the encoder name.

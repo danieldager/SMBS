@@ -15,12 +15,18 @@ uv sync --project envs/textless
 
 ## Workflow
 
+The `smbs` CLI submits SLURM jobs by default. Add `--local` to run directly
+on the current node (e.g. an interactive GPU session). Override SLURM defaults
+with `-p`/`--partition` and `--time`.
+
 ### 1. Scan — create a manifest of audio files
 
 ```bash
 smbs scan /path/to/audio/dataset
-# or on SLURM:
-sbatch slurm/scan.slurm /path/to/audio/dataset
+# Override partition:
+smbs scan /path/to/audio/dataset -p cpu
+# Run locally (no SLURM):
+smbs scan /path/to/audio/dataset --local
 ```
 
 Writes `manifests/<dataset>.txt` (one absolute path per line, sorted for NFS locality).
@@ -30,23 +36,23 @@ Writes `manifests/<dataset>.txt` (one absolute path per line, sorted for NFS loc
 **PyAnnote** (GPU, per-file segments):
 ```bash
 smbs vad-pyannote --manifest chunks5
-# SLURM: sbatch slurm/vad_pyannote.slurm chunks5
+smbs vad-pyannote --manifest chunks5 --array 0-4   # 5 parallel tasks
 ```
 
 **TenVAD** (CPU, multiprocessing):
 ```bash
 smbs vad-ten --manifest chunks5
-# SLURM: sbatch slurm/vad_ten.slurm chunks5
 ```
 
 ### 3. Encode — audio → discrete tokens
 
 ```bash
 smbs encode --encoder spidr_base --dataset chunks30
-# SLURM (3 parallel GPU tasks):
-sbatch slurm/encode.slurm spidr_base chunks30
-sbatch slurm/encode.slurm mhubert chunks30      # uses textless env
-sbatch slurm/encode.slurm hubert-500 chunks30    # uses textless env
+smbs encode --encoder mhubert --dataset chunks30     # uses textless env
+smbs encode --encoder hubert-500 --dataset chunks30   # uses textless env
+
+# Custom array size and partition:
+smbs encode --encoder spidr_base --dataset chunks30 --array 0-5 -p gpu-p1
 ```
 
 Tokens are written as WebDataset `.tar` shards to `tokens/<dataset>_<encoder>/`.
@@ -55,9 +61,7 @@ Tokens are written as WebDataset `.tar` shards to `tokens/<dataset>_<encoder>/`.
 
 ```bash
 smbs train --encoder spidr_base --arch gpt2
-smbs train --encoder spidr_base --arch lstm
-# SLURM (multi-GPU with torchrun):
-sbatch slurm/train.slurm spidr_base gpt2
+smbs train --encoder spidr_base --arch lstm --gpus 4
 ```
 
 Weights are saved to `weights/<encoder>/<model_name>/`.
@@ -65,7 +69,6 @@ Weights are saved to `weights/<encoder>/<model_name>/`.
 **Grid search** (LSTM hyperparameters):
 ```bash
 smbs grid --encoder spidr_base
-# SLURM: sbatch slurm/grid.slurm spidr_base
 ```
 
 ### 5. Evaluate — lexical discrimination (sWuggy)
@@ -73,26 +76,24 @@ smbs grid --encoder spidr_base
 **Prepare** sWuggy data (encode benchmark audio):
 ```bash
 smbs prepare-swuggy --encoder spidr_base --parquet-pattern '/path/to/swuggy/*.parquet'
-# SLURM: sbatch slurm/evaluate.slurm prepare spidr_base '/path/*.parquet'
 ```
 
 **Evaluate** a trained model:
 ```bash
 smbs evaluate --encoder spidr_base --model gpt2_e768_l12_h12_feb12
-# SLURM: sbatch slurm/evaluate.slurm evaluate spidr_base gpt2_e768_l12_h12_feb12
 ```
 
-**Plot** all results:
+**Plot** all results (always runs locally):
 ```bash
 smbs plots
-# SLURM: sbatch slurm/evaluate.slurm plots
+smbs plots --raw
 ```
 
 ## Project structure
 
 ```
 src/smbs/
-  cli.py            # Unified CLI entry point
+  cli.py            # SLURM job launcher (sbatch wrapper)
   config.py         # Shared constants and paths
   scan.py           # Audio file discovery
   utils/

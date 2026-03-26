@@ -159,3 +159,12 @@ def create_unified_plot(use_raw: bool = False):
 
     print(f"Saved unified plot: {output_path}")
     print(f"  Models included: {len(all_models)} ({len(lstm_models)} LSTM, {len(gpt2_models)} GPT-2)")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--raw", action="store_true")
+    args = parser.parse_args()
+    create_unified_plot(use_raw=args.raw)

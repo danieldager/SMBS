@@ -24,8 +24,7 @@ export PYTHONUNBUFFERED=1
 module purge
 module load ffmpeg llvm
 
-uv run --frozen smbs vad-ten \
-    --manifest "$MANIFEST" \
+uv run python -m smbs.vad.tenvad "$MANIFEST" \
     --workers "$SLURM_CPUS_PER_TASK"
 
 echo ""
