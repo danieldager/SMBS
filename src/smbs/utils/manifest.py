@@ -10,29 +10,28 @@ from smbs.config import MANIFESTS_DIR
 def resolve_manifest(dataset: str) -> Path:
     """Resolve a dataset name to a manifest file path.
 
-    Tries, in order: manifests/{dataset}.csv, .parquet, .txt
+    Tries, in order: manifests/{dataset}.csv, .parquet
     If dataset is already an existing path, returns it directly.
     """
     p = Path(dataset)
     if p.exists():
         return p
 
-    for ext in (".csv", ".parquet", ".txt"):
+    for ext in (".csv", ".parquet"):
         candidate = MANIFESTS_DIR / f"{dataset}{ext}"
         if candidate.exists():
             return candidate
 
     raise FileNotFoundError(
         f"No manifest found for '{dataset}'. "
-        f"Searched: {MANIFESTS_DIR}/{dataset}.{{csv,parquet,txt}}"
+        f"Searched: {MANIFESTS_DIR}/{dataset}.{{csv,parquet}}"
     )
 
 
 def load_manifest(manifest_path: str | Path) -> pl.DataFrame:
-    """Load manifest from CSV, Parquet, or TXT.
+    """Load manifest from CSV or Parquet.
 
-    For CSV/Parquet: expects 'file_id' and 'audio_filepath' (or 'path') columns.
-    For TXT: one absolute path per line, file_id is derived from stem.
+    Expects 'file_id' and 'audio_filepath' (or 'path') columns.
     """
     path = Path(manifest_path)
     suffix = path.suffix.lower()
@@ -41,15 +40,8 @@ def load_manifest(manifest_path: str | Path) -> pl.DataFrame:
         df = pl.read_parquet(path)
     elif suffix == ".csv":
         df = pl.read_csv(path)
-    elif suffix == ".txt":
-        lines = [l.strip() for l in path.read_text().splitlines() if l.strip()]
-        df = pl.DataFrame({
-            "audio_filepath": lines,
-            "file_id": [Path(l).stem for l in lines],
-        })
-        return df
     else:
-        raise ValueError(f"Unsupported manifest format: {suffix}")
+        raise ValueError(f"Unsupported manifest format: {suffix}. Expected .csv or .parquet")
 
     # Normalize column names
     if "path" in df.columns and "audio_filepath" not in df.columns:
@@ -69,14 +61,6 @@ def get_task_shard(
     """Parse manifest and return (total_files, chunk_size, file_paths) for an array task."""
     path = Path(manifest_path)
     suffix = path.suffix.lower()
-
-    if suffix == ".txt":
-        all_paths = sorted([l.strip() for l in path.read_text().splitlines() if l.strip()])
-        total = len(all_paths)
-        chunk = total // array_count
-        start = array_id * chunk
-        end = total if array_id == array_count - 1 else start + chunk
-        return total, end - start, all_paths[start:end]
 
     if suffix == ".parquet":
         lf = pl.scan_parquet(path)

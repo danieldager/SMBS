@@ -24,7 +24,7 @@ All commands submit SLURM jobs by default. Add `--local` to run directly
 smbs scan /path/to/audio/dataset
 ```
 
-Writes `manifests/<dataset>.txt` — one absolute path per line, sorted for NFS locality.
+Writes `manifests/<dataset>.csv` with `file_id` and `audio_filepath` columns, sorted for NFS locality.
 
 ### 2. VAD — voice activity detection (optional)
 

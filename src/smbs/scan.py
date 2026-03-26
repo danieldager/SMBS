@@ -59,7 +59,7 @@ def run_scan(dataset_dir: str, workers: int | None = None) -> None:
         raise SystemExit(f"ERROR: not a directory: {dataset}")
 
     MANIFESTS_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = (MANIFESTS_DIR / f"{dataset.name}.txt").resolve()
+    output_path = (MANIFESTS_DIR / f"{dataset.name}.csv").resolve()
 
     print(f"Scanning {dataset}...")
     paths = iter_audio_files_parallel(dataset, num_workers=workers)
@@ -68,12 +68,12 @@ def run_scan(dataset_dir: str, workers: int | None = None) -> None:
     print("Sorting by (directory, filename) for NFS cache locality...")
     paths.sort(key=lambda p: (str(p.parent), p.name))
 
-    print(f"Writing {len(paths):,} paths to {output_path}...")
-    with open(output_path, "w", encoding="utf-8") as f:
-        for i, p in enumerate(paths, 1):
-            f.write(str(p) + "\n")
-            if i % 100_000 == 0:
-                print(f"  Written {i:,}/{len(paths):,} paths...")
+    import polars as pl
+    df = pl.DataFrame({
+        "file_id": [p.stem for p in paths],
+        "audio_filepath": [str(p) for p in paths],
+    })
+    df.write_csv(output_path)
 
     print(f"\nWrote {len(paths):,} paths to {output_path}")
 
