@@ -7,37 +7,25 @@
 #SBATCH --time=12:00:00
 #SBATCH --partition=cpu,erc-dupoux,gpu-p1,gpu-p2
 
-# Validate dataset
-if [ -z "$1" ]; then
-    echo "Usage: sbatch vad_ten.slurm <MANIFEST_FILE>"
-    echo "Example: sbatch vad_ten.slurm manifests/mydataset.txt"
-    exit 1
-fi
+# Usage: sbatch slurm/vad_ten.slurm <manifest>
+# Example: sbatch slurm/vad_ten.slurm chunks5
 
-MANIFEST="$1"
-
-if [ ! -f "$MANIFEST" ]; then
-    echo "ERROR: Manifest not found: $MANIFEST"
-    exit 1
-fi
-
-mkdir -p logs
+MANIFEST="${1:?Usage: sbatch slurm/vad_ten.slurm <manifest>}"
 
 echo "TenVAD Pipeline"
-echo "Job ID: $SLURM_JOB_ID"
-echo "Manifest: $MANIFEST"
-echo "CPUs: $SLURM_CPUS_PER_TASK"
-echo "Memory: ${SLURM_MEM_PER_NODE}"
+echo "Job ID: $SLURM_JOB_ID | Manifest: $MANIFEST"
+echo "CPUs: $SLURM_CPUS_PER_TASK | Memory: ${SLURM_MEM_PER_NODE}"
 echo "Started: $(date)"
 
 export LD_LIBRARY_PATH=/shared/opt/linux-rocky9-x86_64/gcc-11.4.1/ffmpeg-6.1.1-gynsavpssxgp4ewikkmsa6jswfgi3ycg/lib:/shared/opt/linux-rocky9-x86_64/gcc-11.4.1/llvm-17.0.6-ibcxgmojxutzsgeoyywyraq5fmvycsfl/lib/x86_64-unknown-linux-gnu:$LD_LIBRARY_PATH
 export POLARS_SKIP_CPU_CHECK=1
+export PYTHONUNBUFFERED=1
 
 module purge
 module load ffmpeg llvm
 
-PYTHONUNBUFFERED=1 \
-uv run python -m scripts.vad.tenvad "$MANIFEST" \
+uv run --frozen smbs vad-ten \
+    --manifest "$MANIFEST" \
     --workers "$SLURM_CPUS_PER_TASK"
 
 echo ""

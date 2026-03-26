@@ -12,9 +12,9 @@
 #   script:  prepare_swuggy, evaluate, or plots
 #
 # Examples:
-#   sbatch scripts/swuggy/run.slurm prepare_swuggy hubert-500
-#   sbatch scripts/swuggy/run.slurm evaluate hubert-500 lstm_h256_l2_d0.0_09feb13
-#   sbatch scripts/swuggy/run.slurm plots --dataset swuggy
+#   sbatch scripts/swuggy/run.slurm prepare_swuggy [encoder]
+#   sbatch scripts/swuggy/run.slurm evaluate [encoder] [checkpoint]
+#   sbatch scripts/swuggy/run.slurm plots
 
 SCRIPT_NAME="${1:?Usage: sbatch scripts/swuggy/run.slurm <script> [args...]}"
 shift 1
@@ -47,12 +47,12 @@ export PYTHONUNBUFFERED=1
 
 # Only prepare_swuggy with legacy encoders needs the textless environment
 if [ "$SCRIPT_NAME" = "prepare_swuggy" ] && [ "$ENCODER" != "spidr_base" ]; then
-    uv run --project envs/textless --frozen "$SCRIPT_PATH" --encoder "$ENCODER" "$@"
+    uv run --project envs/textless "$SCRIPT_PATH" --encoder "$ENCODER" "$@"
 # Everything else uses main uv environment
 elif [ "$SCRIPT_NAME" = "plots" ]; then
-    uv run --frozen "$SCRIPT_PATH" "$@"
+    uv run "$SCRIPT_PATH" "$@"
 else
-    uv run --frozen "$SCRIPT_PATH" --encoder "$ENCODER" "$@"
+    uv run "$SCRIPT_PATH" --encoder "$ENCODER" "$@"
 fi
 
 echo ""

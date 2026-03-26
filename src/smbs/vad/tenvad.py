@@ -1,20 +1,16 @@
-#!/usr/bin/env python3
-"""
-TenVAD pipeline: voice activity detection with multiprocessing.
+"""TenVAD pipeline — CPU-based voice activity detection with multiprocessing.
 
 Outputs two parquet files:
   - metadata.parquet  per-file summary (duration, speech ratio, etc.)
   - segments.parquet  per-segment rows (file_id, onset, offset, duration)
 
-Files containing any speech segment >= 10 s are copied to data/ for inspection.
+Files containing any speech segment >= threshold are flagged.
 """
 
 import sys
 import time
 import shutil
 import random
-import argparse
-import warnings
 import multiprocessing as mp
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -24,20 +20,17 @@ import polars as pl
 import torch
 import torchaudio
 
-warnings.filterwarnings("ignore", message=".*In 2.9.*")
-warnings.filterwarnings("ignore", message=".*StreamingMediaDecoder.*")
-
 from ten_vad import TenVad
-from scripts.vad.utils import get_task_shard
 
-TARGET_SR = 16_000
-LONG_SEGMENT_THRESHOLD = 10.0  # seconds – copy file to data/ if any segment >= this
+from smbs.config import SAMPLE_RATE, METADATA_DIR
+from smbs.utils.manifest import get_task_shard
+
+LONG_SEGMENT_THRESHOLD = 10.0  # seconds
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 def set_seeds(seed: int = 42) -> None:
     random.seed(seed)
@@ -67,7 +60,7 @@ def get_runs(flags: np.ndarray):
 
 
 def runs_to_segments(runs: np.ndarray, hop_size: int, sr: int) -> list[dict]:
-    """Convert frame-index runs to list of {onset, offset, duration} in seconds (3dp)."""
+    """Convert frame-index runs to list of {onset, offset, duration} in seconds."""
     if runs.size == 0:
         return []
     factor = hop_size / sr
@@ -81,7 +74,6 @@ def runs_to_segments(runs: np.ndarray, hop_size: int, sr: int) -> list[dict]:
 
 
 def segment_stats(durations: list[float]) -> dict:
-    """Summary statistics for a list of durations."""
     if not durations:
         return {"max": 0.0, "min": 0.0, "sum": 0.0, "num": 0, "avg": 0.0}
     arr = np.asarray(durations)
@@ -109,28 +101,17 @@ def _error_meta(path: str, error: str) -> dict:
         "speech_ratio": 0.0,
         "n_speech_segments": 0,
         "n_silence_segments": 0,
-        "speech_max": 0.0,
-        "speech_min": 0.0,
-        "speech_sum": 0.0,
-        "speech_num": 0,
-        "speech_avg": 0.0,
-        "nospch_max": 0.0,
-        "nospch_min": 0.0,
-        "nospch_sum": 0.0,
-        "nospch_num": 0,
-        "nospch_avg": 0.0,
+        "speech_max": 0.0, "speech_min": 0.0, "speech_sum": 0.0,
+        "speech_num": 0, "speech_avg": 0.0,
+        "nospch_max": 0.0, "nospch_min": 0.0, "nospch_sum": 0.0,
+        "nospch_num": 0, "nospch_avg": 0.0,
         "has_long_segment": False,
         "error": error,
     }
 
 
 def process_file(args: tuple) -> tuple[dict, list[dict]]:
-    """
-    Process one WAV file.
-
-    Returns (metadata_row, segment_rows) where segment_rows is a list of
-    dicts each containing file_id, onset, offset, duration.
-    """
+    """Process one WAV file. Returns (metadata_row, segment_rows)."""
     wav_path, hop_size, threshold = args
 
     try:
@@ -142,19 +123,16 @@ def process_file(args: tuple) -> tuple[dict, list[dict]]:
         waveform, sr = torchaudio.load(str(wav_path))
         original_sr = sr
 
-        # Mono
         if waveform.size(0) > 1:
             waveform = waveform[0:1, :]
 
-        # Resample to 16 kHz if needed
-        if sr != TARGET_SR:
-            waveform = torchaudio.transforms.Resample(sr, TARGET_SR)(waveform)
-            sr = TARGET_SR
+        if sr != SAMPLE_RATE:
+            waveform = torchaudio.transforms.Resample(sr, SAMPLE_RATE)(waveform)
+            sr = SAMPLE_RATE
 
         data = (waveform.squeeze().numpy() * 32767).astype(np.int16)
         duration = round(len(data) / sr, 3)
 
-        # Frame-level VAD
         n_frames = len(data) // hop_size
         frames = data[: n_frames * hop_size].reshape(-1, hop_size)
         flags = np.empty(n_frames, dtype=np.uint8)
@@ -162,7 +140,6 @@ def process_file(args: tuple) -> tuple[dict, list[dict]]:
         for i in range(n_frames):
             _, flags[i] = proc(frames[i])
 
-        # Compute segments
         speech_runs, silence_runs = get_runs(flags)
         speech_segs = runs_to_segments(speech_runs, hop_size, sr)
         silence_segs = runs_to_segments(silence_runs, hop_size, sr)
@@ -227,7 +204,7 @@ def process_parallel(
     threshold: float,
     workers: int,
 ) -> tuple[list[dict], list[dict]]:
-    """Run VAD on all files using a process pool. Returns (metadata_rows, segment_rows)."""
+    """Run VAD on all files using a process pool."""
     tasks = [(w, hop_size, threshold) for w in wavs]
     meta_rows: list[dict] = []
     seg_rows: list[dict] = []
@@ -259,13 +236,8 @@ def process_parallel(
     return meta_rows, seg_rows
 
 
-# ---------------------------------------------------------------------------
-# Copy long-segment files for inspection
-# ---------------------------------------------------------------------------
-
-
 def copy_long_segment_files(meta_df: pl.DataFrame, dest: Path) -> int:
-    """Copy files that have at least one speech segment >= LONG_SEGMENT_THRESHOLD to dest/."""
+    """Copy files with speech segments >= LONG_SEGMENT_THRESHOLD to dest/."""
     long = meta_df.filter(pl.col("has_long_segment"))
     if long.is_empty():
         return 0
@@ -281,66 +253,49 @@ def copy_long_segment_files(meta_df: pl.DataFrame, dest: Path) -> int:
     return copied
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="TenVAD pipeline")
-    parser.add_argument("manifest", help="Path to manifest (.txt / .csv / .parquet)")
-    parser.add_argument("--hop-size", type=int, default=256)
-    parser.add_argument("--threshold", type=float, default=0.5)
-    parser.add_argument("-w", "--workers", type=int, default=None,
-                        help="Parallel workers (default: all CPUs)")
-    args = parser.parse_args()
-
+def run_tenvad(
+    manifest: str,
+    hop_size: int = 256,
+    threshold: float = 0.5,
+    workers: int | None = None,
+) -> None:
+    """Run TenVAD on a manifest."""
     set_seeds(42)
 
-    # Resolve workers
-    workers = args.workers or mp.cpu_count()
+    workers = workers or mp.cpu_count()
     print(f"Workers: {workers}")
 
-    # Load manifest
-    _, _, paths = get_task_shard(args.manifest, 0, 1)
+    _, _, paths = get_task_shard(manifest, 0, 1)
     wavs = [Path(p) for p in paths]
     print(f"Files:   {len(wavs)}")
 
     if not wavs:
         print("Nothing to process.")
-        sys.exit(0)
+        return
 
-    # Output directory
-    manifest_stem = Path(args.manifest).stem
-    out_dir = Path("metadata") / manifest_stem / "ten"
+    manifest_stem = Path(manifest).stem
+    out_dir = METADATA_DIR / manifest_stem / "ten"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---- Run VAD ----
-    meta_rows, seg_rows = process_parallel(wavs, args.hop_size, args.threshold, workers)
+    meta_rows, seg_rows = process_parallel(wavs, hop_size, threshold, workers)
 
     if not meta_rows:
         print("ERROR: all files failed", file=sys.stderr)
         sys.exit(1)
 
-    # Deterministic output order
     meta_rows.sort(key=lambda r: r["path"])
     seg_rows.sort(key=lambda r: (r["file_id"], r["onset"]))
 
-    # ---- Save metadata.parquet ----
     meta_df = pl.DataFrame(meta_rows)
-    meta_path = out_dir / "metadata.parquet"
-    meta_df.write_parquet(meta_path, compression="zstd")
-    print(f"Saved {meta_path}  ({len(meta_df)} rows)")
+    meta_df.write_parquet(out_dir / "metadata.parquet", compression="zstd")
+    print(f"Saved metadata.parquet ({len(meta_df)} rows)")
 
-    # ---- Save segments.parquet ----
     seg_df = pl.DataFrame(seg_rows) if seg_rows else pl.DataFrame(
         schema={"file_id": pl.Utf8, "onset": pl.Float64, "offset": pl.Float64, "duration": pl.Float64}
     )
-    seg_path = out_dir / "segments.parquet"
-    seg_df.write_parquet(seg_path, compression="zstd")
-    print(f"Saved {seg_path}  ({len(seg_df)} rows)")
+    seg_df.write_parquet(out_dir / "segments.parquet", compression="zstd")
+    print(f"Saved segments.parquet ({len(seg_df)} rows)")
 
-    # ---- Summary ----
     ok = meta_df.filter(pl.col("success"))
     fail = meta_df.filter(~pl.col("success"))
     print(f"\nSuccess: {len(ok)}/{len(meta_df)}")
@@ -349,12 +304,8 @@ def main() -> None:
         for row in fail.head(5).iter_rows(named=True):
             print(f"  {Path(row['path']).name}: {row['error']}", file=sys.stderr)
 
-    # ---- Copy long-segment files to data/ for manual inspection ----
-    data_dir = Path("data") / manifest_stem / "long_segments"
+    from smbs.config import PROJECT_ROOT
+    data_dir = PROJECT_ROOT / "data" / manifest_stem / "long_segments"
     n_copied = copy_long_segment_files(meta_df, data_dir)
     if n_copied:
         print(f"Copied {n_copied} files with speech >= {LONG_SEGMENT_THRESHOLD}s to {data_dir}")
-
-
-if __name__ == "__main__":
-    main()

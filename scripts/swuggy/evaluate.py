@@ -27,10 +27,7 @@ from scripts.encode.encoders import get_encoder_config
 from scripts.swuggy.utils import load_checkpoint
 
 
-# ============================================================================
-# Core computation
-# ============================================================================
-
+# ───────────────────── Core computation ─────────────────────
 
 def calculate_sequence_log_probability(model, tokens, device):
     """Compute log P(sequence) via autoregressive factorization.
@@ -124,9 +121,7 @@ def add_log_probabilities(model, df: pl.DataFrame, tokens_dict: dict, device: st
     )
 
 
-# ============================================================================
-# Analysis
-# ============================================================================
+# ───────────────────── Analysis ─────────────────────
 
 
 def discrimination_accuracy(
@@ -166,9 +161,7 @@ def per_voice_accuracy(
     return results
 
 
-# ============================================================================
-# Path helpers
-# ============================================================================
+# ───────────────────── Path helpers ─────────────────────
 
 ROOT = Path.cwd()
 
@@ -216,9 +209,7 @@ def print_analysis(df_scored: pl.DataFrame, output_path: Path):
     print(f"\n{'=' * 60}")
 
 
-# ============================================================================
-# CLI
-# ============================================================================
+# ───────────────────── CLI ─────────────────────
 
 if __name__ == "__main__":
     import argparse
