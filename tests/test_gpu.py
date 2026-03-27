@@ -177,12 +177,6 @@ def test_encoder_determinism():
         print(f"  {name}: deterministic ({len(t1)} tokens)")
 
 
-def test_tenvad_import():
-    """TenVAD can be imported."""
-    import ten_vad  # noqa: F401
-    print(f"  ten_vad module imported OK")
-
-
 # ── Main ─────────────────────────────────────────────────────────────────
 
 
@@ -196,7 +190,6 @@ TESTS = [
     ("mhubert_encoder", test_mhubert_encoder),
     ("spidr_encoder", test_spidr_encoder),
     ("encoder_determinism", test_encoder_determinism),
-    ("tenvad_import", test_tenvad_import),
 ]
 
 

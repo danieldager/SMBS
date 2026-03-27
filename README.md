@@ -26,19 +26,7 @@ smbs scan /path/to/audio/dataset
 
 Writes `manifests/<dataset>.csv` with `file_id` and `audio_filepath` columns, sorted for NFS locality.
 
-### 2. VAD — voice activity detection (optional)
-
-```bash
-smbs vad --manifest chunks5
-smbs vad --manifest chunks5 --workers 32
-```
-
-Runs TenVAD on CPU. Outputs `metadata/<manifest>/ten/metadata.parquet` and `segments.parquet`.
-
-> **Note:** The VAD SLURM script sets `LD_LIBRARY_PATH` to load system LLVM
-> (`libc++.so.1`) required by TenVAD's native library. See `slurm/vad_ten.slurm`.
-
-### 3. Encode — audio → discrete tokens
+### 2. Encode — audio → discrete tokens
 
 ```bash
 smbs encode --encoder spidr_base --dataset chunks30
@@ -51,7 +39,7 @@ smbs encode --encoder spidr_base --dataset chunks30 --array 0-5
 
 Tokens are written as WebDataset `.tar` shards to `tokens/<dataset>_<encoder>/`.
 
-### 4. Train — language models on token sequences
+### 3. Train — language models on token sequences
 
 ```bash
 smbs train --encoder spidr_base                    # GPT-2 (default)
@@ -63,12 +51,12 @@ smbs grid --encoder spidr_base
 
 Weights are saved to `weights/<encoder>/<model_name>/`.
 
-### 5. Evaluate — sWuggy lexical discrimination
+### 4. Evaluate — sWuggy lexical discrimination
 
 **Prepare** — The raw sWuggy dataset stores word pairs (real word + pseudo-word)
 with embedded audio. `prepare-swuggy` flattens these pairs into individual
 samples, encodes each audio clip into tokens, and writes the result as
-WebDataset shards + a metadata parquet. This only needs to run once per encoder.
+WebDataset shards + a metadata CSV. This only needs to run once per encoder.
 
 ```bash
 # Prepare: encode sWuggy benchmark audio (one-time per encoder)
@@ -83,8 +71,8 @@ smbs plots
 
 #### Evaluation dataset schema
 
-To bring your own lexical discrimination dataset, the metadata parquet
-(`metadata/<dataset>.parquet`) must follow this schema:
+To bring your own lexical discrimination dataset, the metadata CSV
+(`metadata/<dataset>.csv`) must follow this schema:
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -148,8 +136,6 @@ src/smbs/
 │   ├── swuggy.py       sWuggy preparation + evaluation
 │   ├── metrics.py      discrimination_accuracy, per_voice_accuracy
 │   └── plots.py        Result visualization (Plotly + Matplotlib)
-├── vad/
-│   └── tenvad.py       TenVAD CPU pipeline (multiprocessing)
 └── utils/
     ├── audio.py        Audio loading, resampling, mono conversion
     └── manifest.py     Manifest resolution + task sharding
@@ -165,7 +151,7 @@ sbatch slurm/test.slurm
 ```
 
 Runs 10 tests on a GPU node: imports, config, registry, audio loading,
-CUDA availability, all three encoders, determinism, and TenVAD.
+CUDA availability, all three encoders, and determinism.
 
 ## Dependencies
 
@@ -176,7 +162,6 @@ Key packages (all installable via `uv sync`, no system dependencies required):
 - **transformers** — HuBERT model loading (HuggingFace Hub)
 - **scikit-learn**, **joblib** — k-means quantization for HuBERT encoders
 - **spidr** — SPIDR encoder
-- **ten-vad** — voice activity detection
 - **webdataset** — streaming token storage
 - **polars** — data manipulation
 - **plotly**, **matplotlib**, **seaborn** — visualization

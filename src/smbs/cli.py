@@ -156,18 +156,6 @@ def cmd_scan(args: argparse.Namespace) -> None:
 
 
 
-def cmd_vad_ten(args: argparse.Namespace) -> None:
-    if args.local:
-        from smbs.utils.manifest import resolve_manifest
-        from smbs.vad.tenvad import run_tenvad
-
-        manifest_path = str(resolve_manifest(args.manifest))
-        run_tenvad(manifest_path, args.hop_size, args.threshold, args.workers)
-    else:
-        flags = _slurm_flags(args)
-        _sbatch("vad_ten.slurm", [args.manifest], flags)
-
-
 # ── CLI entry point ──────────────────────────────────────────────────────
 
 
@@ -236,15 +224,6 @@ def main() -> None:
     p.add_argument("--workers", type=int, default=None)
     _add_slurm_args(p)
     p.set_defaults(func=cmd_scan)
-
-    # vad
-    p = sub.add_parser("vad", help="TenVAD voice activity detection [CPU]")
-    p.add_argument("--manifest", required=True)
-    p.add_argument("--hop-size", type=int, default=256)
-    p.add_argument("--threshold", type=float, default=0.5)
-    p.add_argument("--workers", type=int, default=None)
-    _add_slurm_args(p)
-    p.set_defaults(func=cmd_vad_ten)
 
     args = parser.parse_args()
     args.func(args)

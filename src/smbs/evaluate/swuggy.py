@@ -1,6 +1,6 @@
 """sWuggy lexical discrimination benchmark.
 
-Includes both dataset preparation (raw parquet → tokens) and evaluation
+Includes both dataset preparation (raw parquet → tokens + CSV metadata) and evaluation
 (score tokens with model, compute discrimination accuracy).
 """
 
@@ -41,7 +41,7 @@ def prepare_swuggy(
     WebDataset .tar files + metadata parquet.
     """
     output_tokens_dir = TOKENS_DIR / f"swuggy_{encoder_name}"
-    output_metadata_path = METADATA_DIR / "swuggy.parquet"
+    output_metadata_path = METADATA_DIR / "swuggy.csv"
 
     print("=" * 60)
     print("SWUGGY: PREPARE & ENCODE")
@@ -132,7 +132,7 @@ def prepare_swuggy(
     # Save metadata (without audio bytes)
     output_metadata_path.parent.mkdir(parents=True, exist_ok=True)
     df_meta = df.select("group_id", "file_id", "word", "phones", "voice", "positive")
-    df_meta.write_parquet(output_metadata_path)
+    df_meta.write_csv(output_metadata_path)
 
     elapsed_min = (time.time() - start_time) / 60
     print(f"\n{'=' * 60}")
@@ -265,16 +265,16 @@ def run_evaluate(
     force: bool = False,
 ) -> None:
     """Score samples with log-probs and compute discrimination accuracy."""
-    metadata_path = METADATA_DIR / f"{dataset}.parquet"
+    metadata_path = METADATA_DIR / f"{dataset}.csv"
     tokens_dir = TOKENS_DIR / f"{dataset}_{encoder}"
     model_dir = WEIGHTS_DIR / encoder / model
-    output_path = METADATA_DIR / dataset / f"{encoder}_{model}.parquet"
+    output_path = METADATA_DIR / dataset / f"{encoder}_{model}.csv"
 
     # Check for existing results
     if output_path.exists() and not force:
         print(f"Found existing results: {output_path}")
         print("Skipping scoring, running analysis only. Use --force to re-score.\n")
-        df_scored = pl.read_parquet(output_path)
+        df_scored = pl.read_csv(output_path)
         print_analysis(df_scored, output_path)
         return
 
@@ -302,7 +302,7 @@ def run_evaluate(
 
     # Load data
     print("Loading metadata...")
-    df = pl.read_parquet(metadata_path)
+    df = pl.read_csv(metadata_path)
     print(f"  {len(df)} samples")
 
     enc_config = get_encoder_config(encoder)
@@ -316,7 +316,7 @@ def run_evaluate(
 
     # Save
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    df_scored.write_parquet(output_path)
+    df_scored.write_csv(output_path)
 
     # Summary
     scored = df_scored.filter(pl.col("log_prob").is_not_null())

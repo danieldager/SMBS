@@ -9,7 +9,6 @@ dependencies = [
     "torchaudio>=2.8.0,<2.9",
     "polars-lts-cpu>=1.8.0",
     "tqdm>=4.67.1",
-    "ten-vad>=1.0.6.8",
     "plotly>=6.5.2",
     "nbformat>=5.10.4",
     "ipykernel>=7.1.0",

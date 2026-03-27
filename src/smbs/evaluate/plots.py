@@ -17,7 +17,7 @@ sns.set_context("paper", font_scale=1.2)
 
 
 def parse_model_info(filepath: Path):
-    """Extract encoder, architecture, and size from parquet filename."""
+    """Extract encoder, architecture, and size from result CSV filename."""
     stem = filepath.stem
 
     if "lstm" in stem:
@@ -48,15 +48,15 @@ def create_unified_plot(use_raw: bool = False):
 
     models = []
 
-    for parquet_file in metadata_dir.glob("*.parquet"):
+    for csv_file in metadata_dir.glob("*.csv"):
         try:
-            df = pl.read_parquet(parquet_file)
+            df = pl.read_csv(csv_file)
             if prob_col not in df.columns or "positive" not in df.columns:
                 continue
         except Exception:
             continue
 
-        encoder, arch, size = parse_model_info(parquet_file)
+        encoder, arch, size = parse_model_info(csv_file)
         if arch not in ["lstm", "gpt2"]:
             continue
 
@@ -68,7 +68,7 @@ def create_unified_plot(use_raw: bool = False):
             "arch": arch,
             "size": size,
             "accuracy": accuracy,
-            "filename": parquet_file.stem,
+            "filename": csv_file.stem,
         })
 
     if not models:

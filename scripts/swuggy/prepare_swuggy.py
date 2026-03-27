@@ -144,7 +144,7 @@ def prepare_and_encode(
     print(f"\nSaving metadata to {output_metadata_path}...")
     df_meta = df.select("group_id", "file_id", "word", "phones", "voice", "positive")
     Path(output_metadata_path).parent.mkdir(parents=True, exist_ok=True)
-    df_meta.write_parquet(output_metadata_path)
+    df_meta.write_csv(output_metadata_path)
 
     elapsed_min = (time.time() - start_time) / 60
     print(f"\n{'=' * 60}")
@@ -168,7 +168,7 @@ if __name__ == "__main__":
     prepare_and_encode(
         raw_parquet_pattern="/store/projects/lexical-benchmark/swuggy/data/*.parquet",
         output_tokens_dir=str(root / "tokens" / f"swuggy_{args.encoder}"),
-        output_metadata_path=str(root / "metadata" / "swuggy.parquet"),
+        output_metadata_path=str(root / "metadata" / "swuggy.csv"),
         encoder_name=args.encoder,
         device=device,
     )

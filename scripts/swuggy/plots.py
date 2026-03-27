@@ -46,9 +46,9 @@ def discrimination_accuracy(df: pl.DataFrame, prob_column: str = "log_prob",
 
 
 def parse_model_info(filepath: Path):
-    """Extract encoder, architecture, and size from parquet filename."""
-    # e.g., spidr_base_lstm_h256_l2_d0.0.parquet
-    # or   hubert-500_gpt2_e768_l12_h12_09feb13.parquet
+    """Extract encoder, architecture, and size from result CSV filename."""
+    # e.g., spidr_base_lstm_h256_l2_d0.0.csv
+    # or   hubert-500_gpt2_e768_l12_h12_09feb13.csv
     stem = filepath.stem
     
     # Determine architecture by searching for keywords
@@ -85,17 +85,17 @@ def create_unified_plot(metadata_dir: Path, output_dir: Path, use_raw: bool = Fa
     # Collect all models
     models = []
     
-    for parquet_file in metadata_dir.glob("*.parquet"):
+    for csv_file in metadata_dir.glob("*.csv"):
         # Read and check if it's an evaluated result
         try:
-            df = pl.read_parquet(parquet_file)
+            df = pl.read_csv(csv_file)
             if prob_col not in df.columns or "positive" not in df.columns:
                 continue
         except Exception:
             continue
         
         # Parse model info
-        encoder, arch, size = parse_model_info(parquet_file)
+        encoder, arch, size = parse_model_info(csv_file)
         
         # Skip if not LSTM or GPT2
         if arch not in ["lstm", "gpt2"]:
@@ -110,7 +110,7 @@ def create_unified_plot(metadata_dir: Path, output_dir: Path, use_raw: bool = Fa
             "arch": arch,
             "size": size,
             "accuracy": accuracy,
-            "filename": parquet_file.stem
+            "filename": csv_file.stem,
         })
     
     if not models:

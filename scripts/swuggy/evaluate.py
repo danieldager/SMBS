@@ -2,14 +2,14 @@
 Evaluate language models on lexical discrimination tasks.
 
 Combined pipeline: scores every sample with log-probabilities, saves
-the evaluated parquet, then computes and prints discrimination accuracy.
+the evaluated CSV, then computes and prints discrimination accuracy.
 
-If the output parquet already exists, skips scoring and goes straight to analysis.
+If the output CSV already exists, skips scoring and goes straight to analysis.
 
 Path conventions (all derived from dataset + encoder + model):
-    Metadata in:  metadata/{dataset}.parquet
+    Metadata in:  metadata/{dataset}.csv
     Tokens:       tokens/{dataset}_{encoder}/
-    Output:       metadata/{dataset}_{encoder}_{model}.parquet
+    Output:       metadata/{dataset}_{encoder}_{model}.csv
     Checkpoint:   weights/{encoder}/{model}/checkpoint-<latest>
 
 Usage:
@@ -178,10 +178,10 @@ def find_latest_checkpoint(model_dir: Path) -> Path:
 
 def resolve_paths(dataset: str, encoder: str, model: str):
     """Derive all paths from the three user-provided names."""
-    metadata = ROOT / "metadata" / f"{dataset}.parquet"
+    metadata = ROOT / "metadata" / f"{dataset}.csv"
     tokens_dir = ROOT / "tokens" / f"{dataset}_{encoder}"
     model_dir = ROOT / "weights" / encoder / model
-    output = ROOT / "metadata" / "swuggy" / f"{encoder}_{model}.parquet"
+    output = ROOT / "metadata" / "swuggy" / f"{encoder}_{model}.csv"
     return metadata, tokens_dir, model_dir, output
 
 
@@ -224,9 +224,9 @@ if __name__ == "__main__":
                              "(e.g. lstm_h256_l2_d0.0_09feb13). Latest checkpoint is used.")
     parser.add_argument("--dataset", type=str, default="swuggy",
                         help="Dataset name (default: swuggy). "
-                             "Reads metadata/{dataset}.parquet, tokens from tokens/{dataset}_{encoder}/")
+                             "Reads metadata/{dataset}.csv, tokens from tokens/{dataset}_{encoder}/")
     parser.add_argument("--force", action="store_true",
-                        help="Re-score even if output parquet exists")
+                        help="Re-score even if output CSV exists")
     args = parser.parse_args()
     
     if args.model is None:
@@ -239,7 +239,7 @@ if __name__ == "__main__":
     if output_path.exists() and not args.force:
         print(f"Found existing results: {output_path}")
         print("Skipping scoring, running analysis only. Use --force to re-score.\n")
-        df_scored = pl.read_parquet(output_path)
+        df_scored = pl.read_csv(output_path)
         group_col = "group_id" if "group_id" in df_scored.columns else "word_id"
         print_analysis(df_scored, output_path)
         raise SystemExit(0)
@@ -269,7 +269,7 @@ if __name__ == "__main__":
 
     # Load data
     print("Loading metadata...")
-    df = pl.read_parquet(metadata_path)
+    df = pl.read_csv(metadata_path)
     print(f"  {len(df)} samples")
 
     enc_config = get_encoder_config(args.encoder)
@@ -283,7 +283,7 @@ if __name__ == "__main__":
 
     # Save
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    df_scored.write_parquet(output_path)
+    df_scored.write_csv(output_path)
 
     # ── Scoring summary ─────────────────────────────────────────
     scored = df_scored.filter(pl.col("log_prob").is_not_null())

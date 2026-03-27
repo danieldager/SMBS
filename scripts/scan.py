@@ -96,11 +96,8 @@ if __name__ == "__main__":
     paths = iter_audio_files_parallel(dataset, num_workers=args.workers)
 
     print(f"\nFound {len(paths):,} total files")
-    print(
-        f"Sorting by (directory, filename) for NFS cache locality during VAD processing..."
-    )
-    # Sort by directory first, then filename
-    # This ensures sequential reads during VAD stay in same directory → NFS cache hits
+    print(f"Sorting by (directory, filename) for NFS cache locality...")
+    # Sort by directory first, then filename for NFS cache hits
     paths.sort(key=lambda p: (str(p.parent), p.name))
 
     print(f"Writing {len(paths):,} paths to {output_path}...")
@@ -111,6 +108,3 @@ if __name__ == "__main__":
                 print(f"  Written {i:,}/{len(paths):,} paths...")
 
     print(f"\nWrote {len(paths):,} paths to {output_path} (sorted by directory)")
-    print(
-        f"VAD tasks using contiguous chunks will benefit from NFS directory cache hits."
-    )
