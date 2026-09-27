@@ -68,7 +68,7 @@ def main():
     ax.set_xlim(0.45, 0.70)
     ax.set_ylim(ys[-1] - 0.8, ys[0] + 0.95)
     ax.set_xlabel("sWuggy accuracy (length-normalised log-probability)")
-    ax.set_title("sWuggy accuracy, February to March 2026")
+    ax.set_title("sWuggy accuracy, two rounds in 2026")
     for s in ("top", "right", "left"):
         ax.spines[s].set_visible(False)
     ax.tick_params(length=0)

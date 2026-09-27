@@ -9,7 +9,7 @@ A speech language model learns from sound the way a text model learns from words
 ## Results so far
 
 <p align="center"><img src="docs/figures/swuggy.png" width="680" alt="sWuggy accuracy by encoder and model, February to March 2026"></p>
-<p align="center"><sub>sWuggy accuracy, chance is 0.5. Six weeks of the same suite: the first runs sat between 0.55 and 0.58; the best model now, a GPT-2 on SpidR units, reaches 0.66. Every point was trained and scored by the same command.</sub></p>
+<p align="center"><sub>sWuggy accuracy, chance is 0.5. Two rounds of the same suite: the first runs sat between 0.55 and 0.58; the best model now, a GPT-2 on SpidR units, reaches 0.66. Every point was trained and scored by the same command.</sub></p>
 
 ## What the suite settled
 
